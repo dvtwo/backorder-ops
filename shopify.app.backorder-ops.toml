@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "415b727dd4156abc05623be1130d35b8"
+client_id = "2082850fb0d211d3bc11b6a3da23d6cb"
 name = "backorder-ops"
 application_url = "https://example.com"
 embedded = true
