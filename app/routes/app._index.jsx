@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 
@@ -180,6 +180,278 @@ export const loader = async ({ request }) => {
   }
 };
 
+function HorizontalBarChart({
+  title,
+  subtitle,
+  data,
+  valueFormatter = (value) => String(value),
+  emptyText,
+}) {
+  const fontStack =
+    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+  const chartCardStyle = {
+    background: "#ffffff",
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    overflow: "hidden",
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+  };
+
+  const chartHeaderStyle = {
+    padding: "14px 16px 10px 16px",
+    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+  };
+
+  const chartTitleStyle = {
+    margin: 0,
+    fontSize: "14px",
+    lineHeight: 1.2,
+    fontWeight: 700,
+    color: "#0f172a",
+    fontFamily: fontStack,
+  };
+
+  const chartSubtitleStyle = {
+    marginTop: "4px",
+    marginBottom: 0,
+    fontSize: "12px",
+    lineHeight: 1.4,
+    color: "#667085",
+    fontFamily: fontStack,
+    fontWeight: 400,
+  };
+
+  const chartBodyStyle = {
+    padding: "14px 16px 16px 16px",
+    display: "grid",
+    gap: "10px",
+  };
+
+  const emptyStateStyle = {
+    color: "#5b677a",
+    fontSize: "12px",
+    fontFamily: fontStack,
+    fontWeight: 400,
+  };
+
+  const maxValue = Math.max(...data.map((item) => Number(item.value || 0)), 0);
+
+  return (
+    <div style={chartCardStyle}>
+      <div style={chartHeaderStyle}>
+        <h3 style={chartTitleStyle}>{title}</h3>
+        <p style={chartSubtitleStyle}>{subtitle}</p>
+      </div>
+
+      <div style={chartBodyStyle}>
+        {data.length === 0 ? (
+          <div style={emptyStateStyle}>{emptyText}</div>
+        ) : (
+          data.map((item) => {
+            const width =
+              maxValue > 0 ? `${Math.max((item.value / maxValue) * 100, 6)}%` : "0%";
+
+            return (
+              <div key={`${item.label}-${item.value}`}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "10px",
+                    marginBottom: "6px",
+                    fontFamily: fontStack,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      color: "#17212b",
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {item.label}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#0f172a",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {valueFormatter(item.value)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    height: "10px",
+                    background: "#eef2f7",
+                    borderRadius: "999px",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width,
+                      height: "100%",
+                      background: "linear-gradient(90deg, #93c5fd 0%, #3b82f6 100%)",
+                      borderRadius: "999px",
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TrendChart({ title, subtitle, data, emptyText }) {
+  const fontStack =
+    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+  const chartCardStyle = {
+    background: "#ffffff",
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    overflow: "hidden",
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+  };
+
+  const chartHeaderStyle = {
+    padding: "14px 16px 10px 16px",
+    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+  };
+
+  const chartTitleStyle = {
+    margin: 0,
+    fontSize: "14px",
+    lineHeight: 1.2,
+    fontWeight: 700,
+    color: "#0f172a",
+    fontFamily: fontStack,
+  };
+
+  const chartSubtitleStyle = {
+    marginTop: "4px",
+    marginBottom: 0,
+    fontSize: "12px",
+    lineHeight: 1.4,
+    color: "#667085",
+    fontFamily: fontStack,
+    fontWeight: 400,
+  };
+
+  const chartBodyStyle = {
+    padding: "14px 16px 16px 16px",
+  };
+
+  const emptyStateStyle = {
+    color: "#5b677a",
+    fontSize: "12px",
+    fontFamily: fontStack,
+    fontWeight: 400,
+  };
+
+  if (!data.length) {
+    return (
+      <div style={chartCardStyle}>
+        <div style={chartHeaderStyle}>
+          <h3 style={chartTitleStyle}>{title}</h3>
+          <p style={chartSubtitleStyle}>{subtitle}</p>
+        </div>
+        <div style={chartBodyStyle}>
+          <div style={emptyStateStyle}>{emptyText}</div>
+        </div>
+      </div>
+    );
+  }
+
+  const width = 680;
+  const height = 260;
+  const padding = { top: 20, right: 18, bottom: 38, left: 18 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const maxValue = Math.max(...data.map((item) => Number(item.value || 0)), 1);
+
+  const points = data.map((item, index) => {
+    const x =
+      data.length === 1
+        ? padding.left + innerWidth / 2
+        : padding.left + (index / (data.length - 1)) * innerWidth;
+    const y =
+      padding.top + innerHeight - (Number(item.value || 0) / maxValue) * innerHeight;
+
+    return {
+      ...item,
+      x,
+      y,
+    };
+  });
+
+  const path = points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`)
+    .join(" ");
+
+  return (
+    <div style={chartCardStyle}>
+      <div style={chartHeaderStyle}>
+        <h3 style={chartTitleStyle}>{title}</h3>
+        <p style={chartSubtitleStyle}>{subtitle}</p>
+      </div>
+
+      <div style={chartBodyStyle}>
+        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto" }}>
+          <line
+            x1={padding.left}
+            y1={height - padding.bottom}
+            x2={width - padding.right}
+            y2={height - padding.bottom}
+            stroke="#d7dfeb"
+            strokeWidth="1"
+          />
+
+          <path d={path} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
+
+          {points.map((point) => (
+            <g key={`${point.label}-${point.value}`}>
+              <circle cx={point.x} cy={point.y} r="4" fill="#ffffff" stroke="#2563eb" strokeWidth="2" />
+              <text
+                x={point.x}
+                y={height - 14}
+                textAnchor="middle"
+                fontSize="11"
+                fill="#667085"
+                fontFamily={fontStack}
+              >
+                {point.label}
+              </text>
+              <text
+                x={point.x}
+                y={point.y - 10}
+                textAnchor="middle"
+                fontSize="11"
+                fill="#0f172a"
+                fontWeight="600"
+                fontFamily={fontStack}
+              >
+                {point.value}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function AppIndex() {
   const { shop, orders, restock, summary, ordersError } = useLoaderData();
   const [activeTab, setActiveTab] = useState("backorders");
@@ -197,6 +469,16 @@ export default function AppIndex() {
     if (selectedVendor === "all") return restock;
     return restock.filter((item) => (item.vendor || "—") === selectedVendor);
   }, [restock, selectedVendor]);
+
+  const filteredOrders = useMemo(() => {
+    if (selectedVendor === "all") return orders;
+
+    return orders.filter((order) =>
+      order.backorderedLineItems.some(
+        (item) => (item.vendor || "—") === selectedVendor,
+      ),
+    );
+  }, [orders, selectedVendor]);
 
   const groupedRestock = useMemo(() => {
     const groups = {};
@@ -222,6 +504,116 @@ export default function AppIndex() {
       a.vendor.localeCompare(b.vendor),
     );
   }, [filteredRestock]);
+
+  const analytics = useMemo(() => {
+    const vendorTotals = {};
+    const trendMap = {};
+    const agingBuckets = {
+      "0–7 days": 0,
+      "8–14 days": 0,
+      "15–30 days": 0,
+      "31+ days": 0,
+    };
+
+    const now = Date.now();
+
+    filteredRestock.forEach((item) => {
+      const vendor = item.vendor || "—";
+      vendorTotals[vendor] = (vendorTotals[vendor] || 0) + Number(item.shortage || 0);
+    });
+
+    filteredOrders.forEach((order) => {
+      const date = new Date(order.date);
+      const dayKey = date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+
+      trendMap[dayKey] = (trendMap[dayKey] || 0) + 1;
+
+      const daysOld = Math.floor((now - date.getTime()) / (1000 * 60 * 60 * 24));
+      if (daysOld <= 7) {
+        agingBuckets["0–7 days"] += 1;
+      } else if (daysOld <= 14) {
+        agingBuckets["8–14 days"] += 1;
+      } else if (daysOld <= 30) {
+        agingBuckets["15–30 days"] += 1;
+      } else {
+        agingBuckets["31+ days"] += 1;
+      }
+    });
+
+    const shortageByVendor = Object.entries(vendorTotals)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+
+    const topSkus = filteredRestock
+      .map((item) => ({
+        label: item.sku || item.product,
+        value: Number(item.shortage || 0),
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+
+    const trend = Object.entries(trendMap)
+      .map(([label, value]) => ({
+        label,
+        value,
+        sortTime: new Date(label).getTime(),
+      }))
+      .sort((a, b) => a.sortTime - b.sortTime)
+      .slice(-10)
+      .map(({ label, value }) => ({ label, value }));
+
+    const aging = Object.entries(agingBuckets).map(([label, value]) => ({
+      label,
+      value,
+    }));
+
+    const totalShortageUnits = filteredRestock.reduce(
+      (sum, item) => sum + Number(item.shortage || 0),
+      0,
+    );
+
+    const topVendor = shortageByVendor[0] || null;
+    const topSku = filteredRestock
+      .slice()
+      .sort((a, b) => Number(b.shortage || 0) - Number(a.shortage || 0))[0] || null;
+    const agingOver14 = agingBuckets["15–30 days"] + agingBuckets["31+ days"];
+    const topThreeSkuShortage = filteredRestock
+      .slice()
+      .sort((a, b) => Number(b.shortage || 0) - Number(a.shortage || 0))
+      .slice(0, 3)
+      .reduce((sum, item) => sum + Number(item.shortage || 0), 0);
+
+    const insights = [
+      topVendor
+        ? `${topVendor.label} accounts for the highest shortage volume with ${topVendor.value} units short.`
+        : "No vendor shortage trend available yet.",
+      topSku
+        ? `${topSku.sku || topSku.product} is the most constrained SKU with ${topSku.shortage} units short.`
+        : "No SKU shortage trend available yet.",
+      filteredRestock.length > 0 && totalShortageUnits > 0
+        ? `Top 3 SKUs represent ${Math.round((topThreeSkuShortage / totalShortageUnits) * 100)}% of all current shortage units.`
+        : "No concentration insight available yet.",
+      `${agingOver14} backorder order${agingOver14 === 1 ? " is" : "s are"} older than 14 days.`,
+    ];
+
+    return {
+      shortageByVendor,
+      topSkus,
+      trend,
+      aging,
+      insights,
+      filteredSummary: {
+        openBackorderOrders: filteredOrders.length,
+        totalAffectedSkus: filteredRestock.length,
+        totalShortageUnits,
+        vendorsAffected: new Set(filteredRestock.map((item) => item.vendor || "—")).size,
+      },
+    };
+  }, [filteredOrders, filteredRestock]);
 
   const fontStack =
     '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -309,6 +701,7 @@ export default function AppIndex() {
     display: "flex",
     gap: "8px",
     alignItems: "center",
+    flexWrap: "wrap",
   };
 
   const getTabStyle = (isActive) => ({
@@ -641,6 +1034,63 @@ export default function AppIndex() {
     border: "1px solid #dbe3ef",
   };
 
+  const analyticsGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gap: "12px",
+    padding: "12px",
+  };
+
+  const insightCardStyle = {
+    background: "#ffffff",
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    overflow: "hidden",
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+    height: "100%",
+  };
+
+  const insightHeaderStyle = {
+    padding: "14px 16px 10px 16px",
+    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+  };
+
+  const insightTitleStyle = {
+    margin: 0,
+    fontSize: "14px",
+    lineHeight: 1.2,
+    fontWeight: 700,
+    color: "#0f172a",
+  };
+
+  const insightSubtitleStyle = {
+    marginTop: "4px",
+    marginBottom: 0,
+    fontSize: "12px",
+    lineHeight: 1.4,
+    color: "#667085",
+    fontWeight: 400,
+  };
+
+  const insightListStyle = {
+    listStyle: "none",
+    margin: 0,
+    padding: "14px 16px 16px 16px",
+    display: "grid",
+    gap: "10px",
+  };
+
+  const insightItemStyle = {
+    border: "1px solid #e7edf5",
+    background: "#fbfdff",
+    borderRadius: "10px",
+    padding: "10px 12px",
+    fontSize: "12px",
+    lineHeight: 1.45,
+    color: "#344054",
+  };
+
   const formatStatus = (status) => {
     if (!status) return "Unknown";
     return status
@@ -782,6 +1232,14 @@ export default function AppIndex() {
           >
             Restock
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("analytics")}
+            style={getTabStyle(activeTab === "analytics")}
+          >
+            Analytics
+          </button>
         </div>
 
         {activeTab === "backorders" ? (
@@ -861,7 +1319,7 @@ export default function AppIndex() {
               </div>
             )}
           </div>
-        ) : (
+        ) : activeTab === "restock" ? (
           <div style={cardStyle}>
             <div style={sectionHeaderStyle}>
               <h2 style={sectionTitleStyle}>Products needing restock</h2>
@@ -944,8 +1402,8 @@ export default function AppIndex() {
                             const isExpanded = expandedRestockKey === rowKey;
 
                             return (
-                              <>
-                                <tr key={`row-${group.vendor}-${rowKey}`}>
+                              <Fragment key={`${group.vendor}-${rowKey}`}>
+                                <tr>
                                   <td style={bodyCell}>
                                     <button
                                       type="button"
@@ -975,13 +1433,11 @@ export default function AppIndex() {
                                   </td>
                                 </tr>
                                 {isExpanded ? (
-                                  <tr
-                                    key={`expanded-${group.vendor}-${rowKey}`}
-                                  >
+                                  <tr>
                                     <td colSpan={5} style={expandedRowCellStyle}>
                                       <div style={drilldownCardStyle}>
                                         <div style={drilldownHeaderStyle}>
-                                          Affected orders for{" "}
+                                          Affected orders for {" "}
                                           <span style={skuValueStyle}>
                                             {item.sku}
                                           </span>
@@ -989,79 +1445,55 @@ export default function AppIndex() {
                                         <table style={drilldownTableStyle}>
                                           <thead>
                                             <tr>
-                                              <th
-                                                style={drilldownHeaderCellStyle}
-                                              >
+                                              <th style={drilldownHeaderCellStyle}>
                                                 Order
                                               </th>
-                                              <th
-                                                style={drilldownHeaderCellStyle}
-                                              >
+                                              <th style={drilldownHeaderCellStyle}>
                                                 Date
                                               </th>
-                                              <th
-                                                style={drilldownHeaderCellStyle}
-                                              >
+                                              <th style={drilldownHeaderCellStyle}>
                                                 Unfulfilled Qty
                                               </th>
                                             </tr>
                                           </thead>
                                           <tbody>
-                                            {item.affectedOrders.map(
-                                              (affected) => (
-                                                <tr
-                                                  key={`${group.vendor}-${rowKey}-${affected.orderId}-${affected.date}`}
-                                                >
-                                                  <td
-                                                    style={
-                                                      drilldownBodyCellStyle
-                                                    }
+                                            {item.affectedOrders.map((affected) => (
+                                              <tr
+                                                key={`${group.vendor}-${rowKey}-${affected.orderId}-${affected.date}`}
+                                              >
+                                                <td style={drilldownBodyCellStyle}>
+                                                  <a
+                                                    href={getOrderAdminUrl(
+                                                      affected.adminOrderId,
+                                                    )}
+                                                    target="_top"
+                                                    rel="noreferrer"
+                                                    style={orderLinkStyle}
                                                   >
-                                                    <a
-                                                      href={getOrderAdminUrl(
-                                                        affected.adminOrderId,
-                                                      )}
-                                                      target="_top"
-                                                      rel="noreferrer"
-                                                      style={orderLinkStyle}
-                                                    >
-                                                      {affected.orderName}
-                                                    </a>
-                                                  </td>
-                                                  <td
-                                                    style={
-                                                      drilldownBodyCellStyle
-                                                    }
-                                                  >
-                                                    <span
-                                                      style={mutedTextStyle}
-                                                    >
-                                                      {new Date(
-                                                        affected.date,
-                                                      ).toLocaleDateString()}
-                                                    </span>
-                                                  </td>
-                                                  <td
-                                                    style={
-                                                      drilldownBodyCellStyle
-                                                    }
-                                                  >
-                                                    <span
-                                                      style={countTextStyle}
-                                                    >
-                                                      {affected.unfulfilled}
-                                                    </span>
-                                                  </td>
-                                                </tr>
-                                              ),
-                                            )}
+                                                    {affected.orderName}
+                                                  </a>
+                                                </td>
+                                                <td style={drilldownBodyCellStyle}>
+                                                  <span style={mutedTextStyle}>
+                                                    {new Date(
+                                                      affected.date,
+                                                    ).toLocaleDateString()}
+                                                  </span>
+                                                </td>
+                                                <td style={drilldownBodyCellStyle}>
+                                                  <span style={countTextStyle}>
+                                                    {affected.unfulfilled}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            ))}
                                           </tbody>
                                         </table>
                                       </div>
                                     </td>
                                   </tr>
                                 ) : null}
-                              </>
+                              </Fragment>
                             );
                           })}
                         </tbody>
@@ -1069,6 +1501,139 @@ export default function AppIndex() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={cardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>Backorder analytics</h2>
+              <p style={sectionTextStyle}>
+                Snapshot analytics from the current live backlog. Use the vendor
+                filter to focus the charts.
+              </p>
+            </div>
+
+            <div style={toolbarStyle}>
+              <label htmlFor="analytics-vendor-filter" style={labelStyle}>
+                Filter analytics by vendor
+              </label>
+              <select
+                id="analytics-vendor-filter"
+                value={selectedVendor}
+                onChange={(event) => setSelectedVendor(event.target.value)}
+                style={selectStyle}
+              >
+                {vendorOptions.map((vendor) => (
+                  <option key={vendor} value={vendor}>
+                    {vendor === "all" ? "All vendors" : vendor}
+                  </option>
+                ))}
+              </select>
+
+              <div style={resultCountStyle}>
+                {analytics.filteredSummary.openBackorderOrders} order
+                {analytics.filteredSummary.openBackorderOrders === 1 ? "" : "s"}
+                {" · "}
+                {analytics.filteredSummary.totalAffectedSkus} SKU
+                {analytics.filteredSummary.totalAffectedSkus === 1 ? "" : "s"}
+                {" · "}
+                {analytics.filteredSummary.totalShortageUnits} shortage unit
+                {analytics.filteredSummary.totalShortageUnits === 1 ? "" : "s"}
+              </div>
+            </div>
+
+            {ordersError ? (
+              <div style={errorStateStyle}>{ordersError}</div>
+            ) : (
+              <div style={analyticsGridStyle}>
+                <HorizontalBarChart
+                  title="Shortage units by vendor"
+                  subtitle="Which suppliers are driving the most shortage volume right now."
+                  data={analytics.shortageByVendor}
+                  valueFormatter={(value) => `${value} units`}
+                  emptyText="No vendor shortage data available."
+                />
+
+                <HorizontalBarChart
+                  title="Top backordered SKUs"
+                  subtitle="The most constrained SKUs in the current backlog."
+                  data={analytics.topSkus}
+                  valueFormatter={(value) => `${value} short`}
+                  emptyText="No SKU shortage data available."
+                />
+
+                <TrendChart
+                  title="Backorder orders over time"
+                  subtitle="Recent order creation trend for currently affected orders."
+                  data={analytics.trend}
+                  emptyText="No order trend data available."
+                />
+
+                <HorizontalBarChart
+                  title="Aging buckets"
+                  subtitle="How old the currently affected backorder orders are."
+                  data={analytics.aging}
+                  valueFormatter={(value) => `${value} orders`}
+                  emptyText="No aging data available."
+                />
+
+                <div style={insightCardStyle}>
+                  <div style={insightHeaderStyle}>
+                    <h3 style={insightTitleStyle}>Insights</h3>
+                    <p style={insightSubtitleStyle}>
+                      Quick operational takeaways from the current snapshot.
+                    </p>
+                  </div>
+                  <ul style={insightListStyle}>
+                    {analytics.insights.map((insight) => (
+                      <li key={insight} style={insightItemStyle}>
+                        {insight}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div style={insightCardStyle}>
+                  <div style={insightHeaderStyle}>
+                    <h3 style={insightTitleStyle}>Filtered totals</h3>
+                    <p style={insightSubtitleStyle}>
+                      Live counts for the current analytics view.
+                    </p>
+                  </div>
+                  <div
+                    style={{
+                      padding: "14px 16px 16px 16px",
+                      display: "grid",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={insightItemStyle}>
+                      <strong style={{ color: "#0f172a" }}>
+                        Open backorder orders:
+                      </strong>{" "}
+                      {analytics.filteredSummary.openBackorderOrders}
+                    </div>
+                    <div style={insightItemStyle}>
+                      <strong style={{ color: "#0f172a" }}>
+                        Affected SKUs:
+                      </strong>{" "}
+                      {analytics.filteredSummary.totalAffectedSkus}
+                    </div>
+                    <div style={insightItemStyle}>
+                      <strong style={{ color: "#0f172a" }}>
+                        Shortage units:
+                      </strong>{" "}
+                      {analytics.filteredSummary.totalShortageUnits}
+                    </div>
+                    <div style={insightItemStyle}>
+                      <strong style={{ color: "#0f172a" }}>
+                        Vendors affected:
+                      </strong>{" "}
+                      {analytics.filteredSummary.vendorsAffected}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
