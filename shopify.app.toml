@@ -1,0 +1,25 @@
+client_id = "5e54a49f9f7add82d66ede8f4a11e693"
+name = "backorder-ops"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+scopes = "read_orders,read_products,read_inventory,read_locations"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]

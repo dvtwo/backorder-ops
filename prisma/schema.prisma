@@ -32,3 +32,22 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model Backorder {
+  id          String   @id @default(cuid())
+  shop        String
+  orderId     String
+  orderNumber String?
+  customerName String?
+  email       String?
+  productTitle String
+  variantTitle String?
+  quantity    Int      @default(1)
+  reason      String?
+  status      String   @default("pending") // pending, notified, fulfilled, cancelled
+  expectedDate DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("backorders")
+}
