@@ -1,0 +1,54 @@
+# Dependencies
+node_modules
+
+# Build outputs
+/build
+/dist
+/app/build
+/public/build
+/public/_dev
+
+# Prisma & database files (local dev only)
+prisma/dev.sqlite
+prisma/dev.sqlite-journal
+database.sqlite
+app/generated/prisma   # if you use Prisma client generation
+
+# Environment variables & secrets - NEVER commit these
+.env
+.env.*
+.shopify
+
+# Shopify dev files
+.shopify/*
+.shopify.lock
+
+# React Router dev files
+.react-router/
+
+# macOS
+.DS_Store
+.cursor
+
+# Logs
+*.log
+logs
+
+# Temporary / cache
+.cache
+.tmp
+*.tmp
+
+# Editor / IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Extensions build
+/extensions/*/dist
+/extensions/*/build
+
+# Other
+.npmrc
+.prettierignore
+.eslintcache
