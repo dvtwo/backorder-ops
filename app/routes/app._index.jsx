@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 
@@ -440,6 +440,163 @@ function HorizontalBarChart({
           })
         )}
       </div>
+
+      {selectedSkuItem ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close SKU details"
+            onClick={closeSkuDrawer}
+            style={drawerOverlayStyle}
+          />
+          <aside ref={skuDrawerRef} style={drawerStyle} aria-label="SKU details panel">
+            <div style={drawerHeaderWrapStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                <div style={{ display: "grid", gap: "6px" }}>
+                  <p style={drawerSkuStyle}>{selectedSkuItem.sku}</p>
+                  <p style={drawerProductStyle}>{selectedSkuItem.product}</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.vendor}</span>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.affectedOrders.length} affected order{selectedSkuItem.affectedOrders.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={closeSkuDrawer} style={drawerCloseButtonStyle}>
+                  Close
+                </button>
+              </div>
+
+              <div style={drawerMetaGridStyle}>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Selected inventory</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.inventory}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Unfulfilled</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.totalUnfulfilled}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Shortage</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.shortage}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={drawerBodyStyle}>
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Quick actions</h3>
+                  <p style={drawerSectionTextStyle}>Fast actions for purchasing and order follow-up.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  <div style={drawerActionRowStyle}>
+                    <button
+                      type="button"
+                      onClick={() => copyText(selectedSkuItem.sku, "SKU copied")}
+                      style={drawerActionPrimaryStyle}
+                    >
+                      Copy SKU
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyText(
+                        (selectedSkuItem.affectedOrders || []).map((order) => order.orderName).join(", "),
+                        "Order numbers copied",
+                      )}
+                      style={drawerActionButtonStyle}
+                    >
+                      Copy order numbers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportSingleSkuCsv(selectedSkuItem)}
+                      style={drawerActionButtonStyle}
+                    >
+                      Export this SKU
+                    </button>
+                    {(selectedSkuItem.affectedOrders || [])[0]?.adminOrderId ? (
+                      <a
+                        href={getOrderAdminUrl(selectedSkuItem.affectedOrders[0].adminOrderId)}
+                        target="_top"
+                        rel="noreferrer"
+                        style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                      >
+                        Open first order
+                      </a>
+                    ) : null}
+                  </div>
+                  {copiedAction ? <div style={locationHintStyle}>{copiedAction}</div> : null}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Per-location inventory</h3>
+                  <p style={drawerSectionTextStyle}>See every location and which ones are included in the current restock filter.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.locationInventory || []).length === 0 ? (
+                    <div style={emptyStateStyle}>No location-level inventory was returned for this SKU.</div>
+                  ) : (
+                    (selectedSkuItem.locationInventory || [])
+                      .slice()
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                      .map((location) => {
+                        const included =
+                          allLocationsSelected ||
+                          normalizedSelectedLocationIds.includes(location.id);
+
+                        return (
+                          <div key={`${selectedSkuItem.key}-${location.id}`} style={locationListRowStyle}>
+                            <div style={{ display: "grid", gap: "4px" }}>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#17212b" }}>{location.name}</div>
+                              <div style={{ fontSize: "12px", color: "#667085" }}>
+                                Available: {location.quantity}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+                              <div style={{ fontSize: "18px", fontWeight: 800, color: "#0f172a" }}>{location.quantity}</div>
+                              <span style={included ? includedBadgeStyle : mutedBadgeStyle}>
+                                {included ? "Included" : "Excluded"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Affected orders</h3>
+                  <p style={drawerSectionTextStyle}>Orders currently blocked by this SKU shortage.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.affectedOrders || []).map((affected) => (
+                    <div key={`${selectedSkuItem.key}-${affected.orderId}-${affected.date}`} style={drawerOrderRowStyle}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+                        <a
+                          href={getOrderAdminUrl(affected.adminOrderId)}
+                          target="_top"
+                          rel="noreferrer"
+                          style={orderLinkStyle}
+                        >
+                          {affected.orderName}
+                        </a>
+                        <span style={shortageBadgeStyle}>{affected.unfulfilled} unfulfilled</span>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", color: "#667085", fontSize: "12px" }}>
+                        <span>{new Date(affected.date).toLocaleDateString()}</span>
+                        <span>Order ID: {affected.adminOrderId}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -595,6 +752,163 @@ function TrendChart({ title, subtitle, data, emptyText, onPointClick, activeLabe
           })}
         </svg>
       </div>
+
+      {selectedSkuItem ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close SKU details"
+            onClick={closeSkuDrawer}
+            style={drawerOverlayStyle}
+          />
+          <aside ref={skuDrawerRef} style={drawerStyle} aria-label="SKU details panel">
+            <div style={drawerHeaderWrapStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                <div style={{ display: "grid", gap: "6px" }}>
+                  <p style={drawerSkuStyle}>{selectedSkuItem.sku}</p>
+                  <p style={drawerProductStyle}>{selectedSkuItem.product}</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.vendor}</span>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.affectedOrders.length} affected order{selectedSkuItem.affectedOrders.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={closeSkuDrawer} style={drawerCloseButtonStyle}>
+                  Close
+                </button>
+              </div>
+
+              <div style={drawerMetaGridStyle}>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Selected inventory</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.inventory}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Unfulfilled</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.totalUnfulfilled}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Shortage</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.shortage}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={drawerBodyStyle}>
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Quick actions</h3>
+                  <p style={drawerSectionTextStyle}>Fast actions for purchasing and order follow-up.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  <div style={drawerActionRowStyle}>
+                    <button
+                      type="button"
+                      onClick={() => copyText(selectedSkuItem.sku, "SKU copied")}
+                      style={drawerActionPrimaryStyle}
+                    >
+                      Copy SKU
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyText(
+                        (selectedSkuItem.affectedOrders || []).map((order) => order.orderName).join(", "),
+                        "Order numbers copied",
+                      )}
+                      style={drawerActionButtonStyle}
+                    >
+                      Copy order numbers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportSingleSkuCsv(selectedSkuItem)}
+                      style={drawerActionButtonStyle}
+                    >
+                      Export this SKU
+                    </button>
+                    {(selectedSkuItem.affectedOrders || [])[0]?.adminOrderId ? (
+                      <a
+                        href={getOrderAdminUrl(selectedSkuItem.affectedOrders[0].adminOrderId)}
+                        target="_top"
+                        rel="noreferrer"
+                        style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                      >
+                        Open first order
+                      </a>
+                    ) : null}
+                  </div>
+                  {copiedAction ? <div style={locationHintStyle}>{copiedAction}</div> : null}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Per-location inventory</h3>
+                  <p style={drawerSectionTextStyle}>See every location and which ones are included in the current restock filter.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.locationInventory || []).length === 0 ? (
+                    <div style={emptyStateStyle}>No location-level inventory was returned for this SKU.</div>
+                  ) : (
+                    (selectedSkuItem.locationInventory || [])
+                      .slice()
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                      .map((location) => {
+                        const included =
+                          allLocationsSelected ||
+                          normalizedSelectedLocationIds.includes(location.id);
+
+                        return (
+                          <div key={`${selectedSkuItem.key}-${location.id}`} style={locationListRowStyle}>
+                            <div style={{ display: "grid", gap: "4px" }}>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#17212b" }}>{location.name}</div>
+                              <div style={{ fontSize: "12px", color: "#667085" }}>
+                                Available: {location.quantity}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+                              <div style={{ fontSize: "18px", fontWeight: 800, color: "#0f172a" }}>{location.quantity}</div>
+                              <span style={included ? includedBadgeStyle : mutedBadgeStyle}>
+                                {included ? "Included" : "Excluded"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Affected orders</h3>
+                  <p style={drawerSectionTextStyle}>Orders currently blocked by this SKU shortage.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.affectedOrders || []).map((affected) => (
+                    <div key={`${selectedSkuItem.key}-${affected.orderId}-${affected.date}`} style={drawerOrderRowStyle}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+                        <a
+                          href={getOrderAdminUrl(affected.adminOrderId)}
+                          target="_top"
+                          rel="noreferrer"
+                          style={orderLinkStyle}
+                        >
+                          {affected.orderName}
+                        </a>
+                        <span style={shortageBadgeStyle}>{affected.unfulfilled} unfulfilled</span>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", color: "#667085", fontSize: "12px" }}>
+                        <span>{new Date(affected.date).toLocaleDateString()}</span>
+                        <span>Order ID: {affected.adminOrderId}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -604,14 +918,14 @@ export default function AppIndex() {
   const [activeTab, setActiveTab] = useState("backorders");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
-  const [locationMenuOpen, setLocationMenuOpen] = useState(false);
-  const [expandedRestockKey, setExpandedRestockKey] = useState(null);
+  const [selectedSkuKey, setSelectedSkuKey] = useState(null);
+  const [copiedAction, setCopiedAction] = useState("");
   const [analyticsDrilldown, setAnalyticsDrilldown] = useState({
     type: null,
     label: null,
   });
   const analyticsDrilldownRef = useRef(null);
-  const locationMenuRef = useRef(null);
+  const skuDrawerRef = useRef(null);
 
   const vendorOptions = useMemo(() => {
     const vendors = Array.from(
@@ -649,28 +963,13 @@ export default function AppIndex() {
     normalizedSelectedLocationIds.length === 0 ||
     normalizedSelectedLocationIds.length === locationOptions.length;
 
-  const getShortLocationName = (name) => {
-    const cleaned = String(name || "")
-      .replace(/\s+warehouse$/i, "")
-      .replace(/\s+location$/i, "")
-      .trim();
-
-    return cleaned || "Unknown";
-  };
-
   const selectedLocationSummary = allLocationsSelected
     ? "All locations"
-    : (() => {
-        const selectedNames = locationOptions
-          .filter((location) => normalizedSelectedLocationIds.includes(location.id))
-          .map((location) => getShortLocationName(location.name));
-
-        if (selectedNames.length <= 2) {
-          return selectedNames.join(", ");
-        }
-
-        return `${selectedNames.slice(0, 2).join(", ")} (+${selectedNames.length - 2})`;
-      })();
+    : normalizedSelectedLocationIds.length === 1
+      ? locationOptions.find(
+          (location) => location.id === normalizedSelectedLocationIds[0],
+        )?.name || "1 location"
+      : `${normalizedSelectedLocationIds.length} locations`;
 
   const locationFilteredRestock = useMemo(() => {
     return restock
@@ -703,6 +1002,15 @@ export default function AppIndex() {
     () => new Set(filteredRestock.map((item) => String(item.key || ""))),
     [filteredRestock],
   );
+
+
+  const selectedSkuItem = useMemo(() => {
+    if (!selectedSkuKey) return null;
+    return (
+      filteredRestock.find((item) => String(item.key || "") === String(selectedSkuKey)) ||
+      null
+    );
+  }, [filteredRestock, selectedSkuKey]);
 
   const filteredOrders = useMemo(() => {
     return orders
@@ -950,30 +1258,31 @@ export default function AppIndex() {
     });
   }, [activeTab, analytics.drilldownRows.length, analyticsDrilldown.type]);
 
+
   useEffect(() => {
-    if (!locationMenuOpen) return undefined;
+    if (!selectedSkuItem && selectedSkuKey) {
+      setSelectedSkuKey(null);
+    }
+  }, [selectedSkuItem, selectedSkuKey]);
 
-    const handlePointerDown = (event) => {
-      if (locationMenuRef.current?.contains(event.target)) return;
-      setLocationMenuOpen(false);
-    };
+  useEffect(() => {
+    if (!selectedSkuKey) return undefined;
 
-    const handleEscape = (event) => {
+    const handleKeyDown = (event) => {
       if (event.key === "Escape") {
-        setLocationMenuOpen(false);
+        setSelectedSkuKey(null);
       }
     };
 
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("touchstart", handlePointerDown);
-    document.addEventListener("keydown", handleEscape);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedSkuKey]);
 
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("touchstart", handlePointerDown);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [locationMenuOpen]);
+  useEffect(() => {
+    if (!copiedAction) return undefined;
+    const timeout = window.setTimeout(() => setCopiedAction(""), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [copiedAction]);
 
   const fontStack =
     '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -1115,101 +1424,54 @@ export default function AppIndex() {
 
   const toolbarStyle = {
     display: "flex",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: "14px",
+    alignItems: "center",
+    gap: "10px",
     flexWrap: "wrap",
     padding: "12px 18px",
     borderBottom: "1px solid #e7edf5",
     background: "#fcfdff",
   };
 
-  const toolbarLeftStyle = {
-    display: "flex",
-    alignItems: "flex-end",
-    gap: "14px",
-    flexWrap: "wrap",
-    flex: "1 1 560px",
-  };
-
-  const toolbarRightStyle = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    gap: "12px",
-    flex: "0 0 auto",
-    marginLeft: "auto",
-  };
-
   const labelStyle = {
     fontSize: "12px",
     fontWeight: 600,
     color: "#475467",
-    lineHeight: 1.2,
   };
 
   const selectStyle = {
     fontFamily: fontStack,
     fontSize: "12px",
     color: "#17212b",
-    padding: "0 12px",
+    padding: "8px 12px",
     borderRadius: "10px",
     border: "1px solid #cfd8e6",
     background: "#ffffff",
-    minWidth: "0",
-    width: "100%",
-    height: "44px",
+    minWidth: "220px",
     outline: "none",
-    boxSizing: "border-box",
   };
 
   const filterGroupStyle = {
     display: "grid",
-    gap: "6px",
-    minWidth: "240px",
-    flex: "1 1 240px",
+    gap: "4px",
   };
 
   const locationPopoverStyle = {
     position: "relative",
-    width: "100%",
   };
 
   const locationButtonStyle = {
     appearance: "none",
-    border: locationMenuOpen ? "1px solid #3b82f6" : "1px solid #cfd8e6",
+    border: "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
-    padding: "0 12px",
+    padding: "8px 12px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "12px",
     fontWeight: 500,
-    width: "100%",
-    height: "44px",
+    minWidth: "220px",
     textAlign: "left",
-    boxSizing: "border-box",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "8px",
-    boxShadow: locationMenuOpen ? "0 0 0 2px rgba(59, 130, 246, 0.12)" : "none",
-  };
-
-  const locationSummaryTextStyle = {
-    minWidth: 0,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    flex: 1,
-  };
-
-  const locationChevronStyle = {
-    color: "#667085",
-    fontSize: "11px",
-    lineHeight: 1,
-    flexShrink: 0,
   };
 
   const locationMenuStyle = {
@@ -1236,15 +1498,6 @@ export default function AppIndex() {
     fontSize: "12px",
     color: "#17212b",
     cursor: "pointer",
-    userSelect: "none",
-  };
-
-  const locationCheckboxStyle = {
-    width: "14px",
-    height: "14px",
-    margin: 0,
-    accentColor: "#2563eb",
-    flexShrink: 0,
   };
 
   const locationHintStyle = {
@@ -1258,21 +1511,18 @@ export default function AppIndex() {
     border: "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
-    padding: "0 16px",
+    padding: "8px 12px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "12px",
     fontWeight: 600,
-    height: "44px",
-    whiteSpace: "nowrap",
   };
 
   const resultCountStyle = {
     fontSize: "12px",
     color: "#667085",
     fontWeight: 500,
-    whiteSpace: "nowrap",
   };
 
   const tableWrapStyle = {
@@ -1632,6 +1882,202 @@ export default function AppIndex() {
     color: "#344054",
   };
 
+  const drawerOverlayStyle = {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15, 23, 42, 0.28)",
+    zIndex: 40,
+  };
+
+  const drawerStyle = {
+    position: "fixed",
+    top: 0,
+    right: 0,
+    width: "min(520px, 96vw)",
+    height: "100vh",
+    background: "#ffffff",
+    borderLeft: "1px solid #dbe3ef",
+    boxShadow: "-18px 0 40px rgba(15, 23, 42, 0.14)",
+    zIndex: 50,
+    display: "grid",
+    gridTemplateRows: "auto 1fr",
+  };
+
+  const drawerHeaderWrapStyle = {
+    padding: "18px 20px 16px 20px",
+    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
+    display: "grid",
+    gap: "12px",
+  };
+
+  const drawerCloseButtonStyle = {
+    appearance: "none",
+    border: "1px solid #d5deea",
+    background: "#ffffff",
+    borderRadius: "10px",
+    padding: "8px 10px",
+    fontSize: "12px",
+    fontWeight: 600,
+    color: "#17212b",
+    cursor: "pointer",
+  };
+
+  const drawerBodyStyle = {
+    overflowY: "auto",
+    padding: "18px 20px 24px 20px",
+    display: "grid",
+    gap: "16px",
+  };
+
+  const drawerSkuStyle = {
+    fontSize: "22px",
+    fontWeight: 800,
+    lineHeight: 1.1,
+    color: "#0f172a",
+    margin: 0,
+  };
+
+  const drawerProductStyle = {
+    margin: 0,
+    fontSize: "13px",
+    lineHeight: 1.5,
+    color: "#526076",
+  };
+
+  const drawerMetaGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: "10px",
+  };
+
+  const drawerMetaCardStyle = {
+    border: "1px solid #e7edf5",
+    borderRadius: "12px",
+    padding: "12px",
+    background: "#fbfdff",
+  };
+
+  const drawerMetaLabelStyle = {
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    textTransform: "uppercase",
+    color: "#667085",
+  };
+
+  const drawerMetaValueStyle = {
+    marginTop: "6px",
+    fontSize: "18px",
+    fontWeight: 800,
+    color: "#0f172a",
+  };
+
+  const drawerSectionCardStyle = {
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    background: "#ffffff",
+    overflow: "hidden",
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+  };
+
+  const drawerSectionHeaderStyle = {
+    padding: "14px 16px 10px 16px",
+    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
+  };
+
+  const drawerSectionTitleStyle = {
+    margin: 0,
+    fontSize: "14px",
+    fontWeight: 700,
+    color: "#0f172a",
+  };
+
+  const drawerSectionTextStyle = {
+    margin: "4px 0 0 0",
+    fontSize: "12px",
+    lineHeight: 1.45,
+    color: "#667085",
+  };
+
+  const drawerSectionBodyStyle = {
+    padding: "14px 16px 16px 16px",
+    display: "grid",
+    gap: "10px",
+  };
+
+  const drawerOrderRowStyle = {
+    border: "1px solid #e7edf5",
+    borderRadius: "12px",
+    padding: "10px 12px",
+    background: "#fbfdff",
+    display: "grid",
+    gap: "6px",
+  };
+
+  const drawerActionRowStyle = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "10px",
+  };
+
+  const drawerActionButtonStyle = {
+    appearance: "none",
+    border: "1px solid #d5deea",
+    background: "#ffffff",
+    borderRadius: "10px",
+    padding: "10px 12px",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#17212b",
+    cursor: "pointer",
+  };
+
+  const drawerActionPrimaryStyle = {
+    ...drawerActionButtonStyle,
+    background: "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)",
+    border: "1px solid #bfdbfe",
+    color: "#1d4ed8",
+  };
+
+  const locationListRowStyle = {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "10px",
+    alignItems: "center",
+    border: "1px solid #e7edf5",
+    borderRadius: "12px",
+    padding: "10px 12px",
+    background: "#fbfdff",
+  };
+
+  const includedBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "62px",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    background: "#ecfdf3",
+    color: "#067647",
+    fontSize: "11px",
+    fontWeight: 700,
+  };
+
+  const mutedBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "62px",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    background: "#f2f4f7",
+    color: "#667085",
+    fontSize: "11px",
+    fontWeight: 700,
+  };
+
   const formatStatus = (status) => {
     if (!status) return "Unknown";
     return status
@@ -1646,18 +2092,20 @@ export default function AppIndex() {
     return `https://${shop}/admin/orders/${adminOrderId}`;
   };
 
-  const toggleExpandedRestock = (key) => {
-    setExpandedRestockKey((current) => (current === key ? null : key));
+  const openSkuDrawer = (key) => {
+    setSelectedSkuKey(String(key || ""));
+  };
+
+  const closeSkuDrawer = () => {
+    setSelectedSkuKey(null);
   };
 
   const handleVendorFilterChange = (value) => {
     setSelectedVendor(value);
     setAnalyticsDrilldown({ type: null, label: null });
-    setLocationMenuOpen(false);
   };
 
   const handleLocationToggle = (locationId) => {
-    setExpandedRestockKey(null);
     setAnalyticsDrilldown({ type: null, label: null });
     setSelectedLocationIds((current) => {
       if (current.length === 0) {
@@ -1683,10 +2131,8 @@ export default function AppIndex() {
   };
 
   const handleAllLocationsToggle = () => {
-    setExpandedRestockKey(null);
     setAnalyticsDrilldown({ type: null, label: null });
     setSelectedLocationIds([]);
-    setLocationMenuOpen(false);
   };
 
   const handleAnalyticsVendorClick = (item) => {
@@ -1717,6 +2163,56 @@ export default function AppIndex() {
         ? { type: null, label: null }
         : { type: "trend", label: item.dateKey },
     );
+  };
+
+  const copyText = async (value, successLabel) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(value || ""));
+        setCopiedAction(successLabel);
+      }
+    } catch (error) {
+      console.error("Clipboard copy failed", error);
+    }
+  };
+
+  const exportSingleSkuCsv = (item) => {
+    if (!item) return;
+
+    const headers = [
+      "SKU",
+      "Product",
+      "Vendor",
+      "Selected Inventory",
+      "Total Unfulfilled",
+      "Shortage",
+      "Affected Orders",
+    ];
+
+    const row = [
+      csvEscape(item.sku),
+      csvEscape(item.product),
+      csvEscape(item.vendor),
+      csvEscape(item.inventory),
+      csvEscape(item.totalUnfulfilled),
+      csvEscape(item.shortage),
+      csvEscape((item.affectedOrders || []).map((order) => order.orderName).join(" | ")),
+    ];
+
+    const csvContent = [headers.join(","), row.join(",")].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const fileName = `backorder-sku-${String(item.sku || item.product || "item")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")}.csv`;
+
+    link.href = url;
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const csvEscape = (value) => {
@@ -1948,86 +2444,69 @@ export default function AppIndex() {
             </div>
 
             <div style={toolbarStyle}>
-              <div style={toolbarLeftStyle}>
-                <div style={filterGroupStyle}>
-                  <label htmlFor="vendor-filter" style={labelStyle}>
-                    Filter by vendor
-                  </label>
-                  <select
-                    id="vendor-filter"
-                    value={selectedVendor}
-                    onChange={(event) => {
-                      setSelectedVendor(event.target.value);
-                      setExpandedRestockKey(null);
-                      setLocationMenuOpen(false);
-                    }}
-                    style={selectStyle}
-                  >
-                    {vendorOptions.map((vendor) => (
-                      <option key={vendor} value={vendor}>
-                        {vendor === "all" ? "All vendors" : vendor}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div style={filterGroupStyle}>
-                  <span style={labelStyle}>Inventory locations</span>
-                  <div style={locationPopoverStyle} ref={locationMenuRef}>
-                    <button
-                      type="button"
-                      style={locationButtonStyle}
-                      onClick={() => setLocationMenuOpen((current) => !current)}
-                      aria-expanded={locationMenuOpen}
-                      aria-haspopup="menu"
-                    >
-                      <span style={locationSummaryTextStyle}>{selectedLocationSummary}</span>
-                      <span style={locationChevronStyle}>{locationMenuOpen ? "▴" : "▾"}</span>
-                    </button>
-                    {locationMenuOpen ? (
-                      <div style={locationMenuStyle}>
-                        <label style={locationOptionRowStyle}>
-                          <input
-                            type="checkbox"
-                            checked={allLocationsSelected}
-                            onChange={handleAllLocationsToggle}
-                            style={locationCheckboxStyle}
-                          />
-                          <span>All locations</span>
-                        </label>
-                        <div style={locationHintStyle}>
-                          Choose one or more locations to recalculate available inventory.
-                        </div>
-                        {locationOptions.map((location) => (
-                          <label key={location.id} style={locationOptionRowStyle}>
-                            <input
-                              type="checkbox"
-                              checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                              onChange={() => handleLocationToggle(location.id)}
-                              style={locationCheckboxStyle}
-                            />
-                            <span>{location.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
+              <div style={filterGroupStyle}>
+                <label htmlFor="vendor-filter" style={labelStyle}>
+                  Filter by vendor
+                </label>
+                <select
+                  id="vendor-filter"
+                  value={selectedVendor}
+                  onChange={(event) => {
+                    setSelectedVendor(event.target.value);
+                                  }}
+                  style={selectStyle}
+                >
+                  {vendorOptions.map((vendor) => (
+                    <option key={vendor} value={vendor}>
+                      {vendor === "all" ? "All vendors" : vendor}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div style={toolbarRightStyle}>
-                <button
-                  type="button"
-                  onClick={exportRestockCsv}
-                  style={exportButtonStyle}
-                >
-                  Export CSV
-                </button>
+              <div style={filterGroupStyle}>
+                <span style={labelStyle}>Inventory locations</span>
+                <details style={locationPopoverStyle}>
+                  <summary style={locationButtonStyle}>
+                    {selectedLocationSummary}
+                  </summary>
+                  <div style={locationMenuStyle}>
+                    <label style={locationOptionRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={allLocationsSelected}
+                        onChange={handleAllLocationsToggle}
+                      />
+                      <span>All locations</span>
+                    </label>
+                    <div style={locationHintStyle}>
+                      Choose one or more locations to recalculate available inventory.
+                    </div>
+                    {locationOptions.map((location) => (
+                      <label key={location.id} style={locationOptionRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                          onChange={() => handleLocationToggle(location.id)}
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              </div>
 
-                <div style={resultCountStyle}>
-                  {filteredRestock.length} result
-                  {filteredRestock.length === 1 ? "" : "s"}
-                </div>
+              <button
+                type="button"
+                onClick={exportRestockCsv}
+                style={exportButtonStyle}
+              >
+                Export CSV
+              </button>
+
+              <div style={resultCountStyle}>
+                {filteredRestock.length} result
+                {filteredRestock.length === 1 ? "" : "s"}
               </div>
             </div>
 
@@ -2065,103 +2544,30 @@ export default function AppIndex() {
                         </thead>
                         <tbody>
                           {group.items.map((item) => {
-                            const rowKey =
-                              item.variantId || item.sku || item.product;
-                            const isExpanded = expandedRestockKey === rowKey;
+                            const rowKey = item.variantId || item.sku || item.product;
 
                             return (
-                              <Fragment key={`${group.vendor}-${rowKey}`}>
-                                <tr>
-                                  <td style={bodyCell}>
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleExpandedRestock(rowKey)}
-                                      style={drilldownButtonStyle}
-                                    >
-                                      <span style={skuValueStyle}>
-                                        {item.sku}
-                                      </span>
-                                    </button>
-                                  </td>
-                                  <td style={bodyCell}>{item.product}</td>
-                                  <td style={bodyCell}>
-                                    <span style={countTextStyle}>
-                                      {item.totalUnfulfilled}
-                                    </span>
-                                  </td>
-                                  <td style={bodyCell}>
-                                    <span style={countTextStyle}>
-                                      {item.inventory}
-                                    </span>
-                                  </td>
-                                  <td style={bodyCell}>
-                                    <span style={shortageBadgeStyle}>
-                                      {item.shortage}
-                                    </span>
-                                  </td>
-                                </tr>
-                                {isExpanded ? (
-                                  <tr>
-                                    <td colSpan={5} style={expandedRowCellStyle}>
-                                      <div style={drilldownCardStyle}>
-                                        <div style={drilldownHeaderStyle}>
-                                          Affected orders for {" "}
-                                          <span style={skuValueStyle}>
-                                            {item.sku}
-                                          </span>
-                                        </div>
-                                        <table style={drilldownTableStyle}>
-                                          <thead>
-                                            <tr>
-                                              <th style={drilldownHeaderCellStyle}>
-                                                Order
-                                              </th>
-                                              <th style={drilldownHeaderCellStyle}>
-                                                Date
-                                              </th>
-                                              <th style={drilldownHeaderCellStyle}>
-                                                Unfulfilled Qty
-                                              </th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {item.affectedOrders.map((affected) => (
-                                              <tr
-                                                key={`${group.vendor}-${rowKey}-${affected.orderId}-${affected.date}`}
-                                              >
-                                                <td style={drilldownBodyCellStyle}>
-                                                  <a
-                                                    href={getOrderAdminUrl(
-                                                      affected.adminOrderId,
-                                                    )}
-                                                    target="_top"
-                                                    rel="noreferrer"
-                                                    style={orderLinkStyle}
-                                                  >
-                                                    {affected.orderName}
-                                                  </a>
-                                                </td>
-                                                <td style={drilldownBodyCellStyle}>
-                                                  <span style={mutedTextStyle}>
-                                                    {new Date(
-                                                      affected.date,
-                                                    ).toLocaleDateString()}
-                                                  </span>
-                                                </td>
-                                                <td style={drilldownBodyCellStyle}>
-                                                  <span style={countTextStyle}>
-                                                    {affected.unfulfilled}
-                                                  </span>
-                                                </td>
-                                              </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ) : null}
-                              </Fragment>
+                              <tr key={`${group.vendor}-${rowKey}`}>
+                                <td style={bodyCell}>
+                                  <button
+                                    type="button"
+                                    onClick={() => openSkuDrawer(rowKey)}
+                                    style={drilldownButtonStyle}
+                                  >
+                                    <span style={skuValueStyle}>{item.sku}</span>
+                                  </button>
+                                </td>
+                                <td style={bodyCell}>{item.product}</td>
+                                <td style={bodyCell}>
+                                  <span style={countTextStyle}>{item.totalUnfulfilled}</span>
+                                </td>
+                                <td style={bodyCell}>
+                                  <span style={countTextStyle}>{item.inventory}</span>
+                                </td>
+                                <td style={bodyCell}>
+                                  <span style={shortageBadgeStyle}>{item.shortage}</span>
+                                </td>
+                              </tr>
                             );
                           })}
                         </tbody>
@@ -2203,45 +2609,34 @@ export default function AppIndex() {
 
               <div style={filterGroupStyle}>
                 <span style={labelStyle}>Inventory locations</span>
-                <div style={locationPopoverStyle} ref={locationMenuRef}>
-                  <button
-                    type="button"
-                    style={locationButtonStyle}
-                    onClick={() => setLocationMenuOpen((current) => !current)}
-                    aria-expanded={locationMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <span style={locationSummaryTextStyle}>{selectedLocationSummary}</span>
-                    <span style={locationChevronStyle}>{locationMenuOpen ? "▴" : "▾"}</span>
-                  </button>
-                  {locationMenuOpen ? (
-                    <div style={locationMenuStyle}>
-                      <label style={locationOptionRowStyle}>
+                <details style={locationPopoverStyle}>
+                  <summary style={locationButtonStyle}>
+                    {selectedLocationSummary}
+                  </summary>
+                  <div style={locationMenuStyle}>
+                    <label style={locationOptionRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={allLocationsSelected}
+                        onChange={handleAllLocationsToggle}
+                      />
+                      <span>All locations</span>
+                    </label>
+                    <div style={locationHintStyle}>
+                      Choose one or more locations to recalculate analytics from available inventory.
+                    </div>
+                    {locationOptions.map((location) => (
+                      <label key={location.id} style={locationOptionRowStyle}>
                         <input
                           type="checkbox"
-                          checked={allLocationsSelected}
-                          onChange={handleAllLocationsToggle}
-                          style={locationCheckboxStyle}
+                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                          onChange={() => handleLocationToggle(location.id)}
                         />
-                        <span>All locations</span>
+                        <span>{location.name}</span>
                       </label>
-                      <div style={locationHintStyle}>
-                        Choose one or more locations to recalculate analytics from available inventory.
-                      </div>
-                      {locationOptions.map((location) => (
-                        <label key={location.id} style={locationOptionRowStyle}>
-                          <input
-                            type="checkbox"
-                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                            onChange={() => handleLocationToggle(location.id)}
-                            style={locationCheckboxStyle}
-                          />
-                          <span>{location.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
+                    ))}
+                  </div>
+                </details>
               </div>
 
               <div style={resultCountStyle}>
@@ -2467,6 +2862,163 @@ export default function AppIndex() {
           </div>
         )}
       </div>
+
+      {selectedSkuItem ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close SKU details"
+            onClick={closeSkuDrawer}
+            style={drawerOverlayStyle}
+          />
+          <aside ref={skuDrawerRef} style={drawerStyle} aria-label="SKU details panel">
+            <div style={drawerHeaderWrapStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                <div style={{ display: "grid", gap: "6px" }}>
+                  <p style={drawerSkuStyle}>{selectedSkuItem.sku}</p>
+                  <p style={drawerProductStyle}>{selectedSkuItem.product}</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.vendor}</span>
+                    <span style={vendorMetaBadgeStyle}>{selectedSkuItem.affectedOrders.length} affected order{selectedSkuItem.affectedOrders.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={closeSkuDrawer} style={drawerCloseButtonStyle}>
+                  Close
+                </button>
+              </div>
+
+              <div style={drawerMetaGridStyle}>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Selected inventory</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.inventory}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Unfulfilled</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.totalUnfulfilled}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>Shortage</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.shortage}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={drawerBodyStyle}>
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Quick actions</h3>
+                  <p style={drawerSectionTextStyle}>Fast actions for purchasing and order follow-up.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  <div style={drawerActionRowStyle}>
+                    <button
+                      type="button"
+                      onClick={() => copyText(selectedSkuItem.sku, "SKU copied")}
+                      style={drawerActionPrimaryStyle}
+                    >
+                      Copy SKU
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyText(
+                        (selectedSkuItem.affectedOrders || []).map((order) => order.orderName).join(", "),
+                        "Order numbers copied",
+                      )}
+                      style={drawerActionButtonStyle}
+                    >
+                      Copy order numbers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportSingleSkuCsv(selectedSkuItem)}
+                      style={drawerActionButtonStyle}
+                    >
+                      Export this SKU
+                    </button>
+                    {(selectedSkuItem.affectedOrders || [])[0]?.adminOrderId ? (
+                      <a
+                        href={getOrderAdminUrl(selectedSkuItem.affectedOrders[0].adminOrderId)}
+                        target="_top"
+                        rel="noreferrer"
+                        style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                      >
+                        Open first order
+                      </a>
+                    ) : null}
+                  </div>
+                  {copiedAction ? <div style={locationHintStyle}>{copiedAction}</div> : null}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Per-location inventory</h3>
+                  <p style={drawerSectionTextStyle}>See every location and which ones are included in the current restock filter.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.locationInventory || []).length === 0 ? (
+                    <div style={emptyStateStyle}>No location-level inventory was returned for this SKU.</div>
+                  ) : (
+                    (selectedSkuItem.locationInventory || [])
+                      .slice()
+                      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                      .map((location) => {
+                        const included =
+                          allLocationsSelected ||
+                          normalizedSelectedLocationIds.includes(location.id);
+
+                        return (
+                          <div key={`${selectedSkuItem.key}-${location.id}`} style={locationListRowStyle}>
+                            <div style={{ display: "grid", gap: "4px" }}>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#17212b" }}>{location.name}</div>
+                              <div style={{ fontSize: "12px", color: "#667085" }}>
+                                Available: {location.quantity}
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+                              <div style={{ fontSize: "18px", fontWeight: 800, color: "#0f172a" }}>{location.quantity}</div>
+                              <span style={included ? includedBadgeStyle : mutedBadgeStyle}>
+                                {included ? "Included" : "Excluded"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              <div style={drawerSectionCardStyle}>
+                <div style={drawerSectionHeaderStyle}>
+                  <h3 style={drawerSectionTitleStyle}>Affected orders</h3>
+                  <p style={drawerSectionTextStyle}>Orders currently blocked by this SKU shortage.</p>
+                </div>
+                <div style={drawerSectionBodyStyle}>
+                  {(selectedSkuItem.affectedOrders || []).map((affected) => (
+                    <div key={`${selectedSkuItem.key}-${affected.orderId}-${affected.date}`} style={drawerOrderRowStyle}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+                        <a
+                          href={getOrderAdminUrl(affected.adminOrderId)}
+                          target="_top"
+                          rel="noreferrer"
+                          style={orderLinkStyle}
+                        >
+                          {affected.orderName}
+                        </a>
+                        <span style={shortageBadgeStyle}>{affected.unfulfilled} unfulfilled</span>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", color: "#667085", fontSize: "12px" }}>
+                        <span>{new Date(affected.date).toLocaleDateString()}</span>
+                        <span>Order ID: {affected.adminOrderId}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   );
 }
