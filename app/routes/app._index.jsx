@@ -27,6 +27,22 @@ export const loader = async ({ request }) => {
                     variant {
                       id
                       inventoryQuantity
+                      inventoryItem {
+                        inventoryLevels(first: 50) {
+                          edges {
+                            node {
+                              location {
+                                id
+                                name
+                              }
+                              quantities(names: ["available"]) {
+                                name
+                                quantity
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -66,8 +82,20 @@ export const loader = async ({ request }) => {
         if (unfulfilled <= 0) return;
 
         const key = item.variant?.id || item.sku || item.title;
-        const inventory = Math.max(
-          Number(item.variant?.inventoryQuantity || 0),
+        const inventoryLevels = item.variant?.inventoryItem?.inventoryLevels?.edges || [];
+        const locationInventory = inventoryLevels.map(({ node: level }) => ({
+          id: level?.location?.id || "",
+          name: level?.location?.name || "Unknown location",
+          quantity: Math.max(
+            Number(
+              level?.quantities?.find((quantity) => quantity?.name === "available")
+                ?.quantity || 0,
+            ),
+            0,
+          ),
+        }));
+        const inventory = locationInventory.reduce(
+          (sum, level) => sum + Number(level.quantity || 0),
           0,
         );
 
@@ -82,6 +110,7 @@ export const loader = async ({ request }) => {
             totalUnfulfilled: 0,
             shortage: 0,
             affectedOrders: [],
+            locationInventory,
           };
         }
 
@@ -119,6 +148,7 @@ export const loader = async ({ request }) => {
           })
           .map((item) => ({
             id: item.id,
+            key: item.variant?.id || item.sku || item.title,
             sku: item.sku || "—",
             vendor: item.vendor || "—",
           }));
@@ -499,6 +529,7 @@ export default function AppIndex() {
   const { shop, orders, restock, summary, ordersError } = useLoaderData();
   const [activeTab, setActiveTab] = useState("backorders");
   const [selectedVendor, setSelectedVendor] = useState("all");
+  const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [expandedRestockKey, setExpandedRestockKey] = useState(null);
   const [analyticsDrilldown, setAnalyticsDrilldown] = useState({
     type: null,
@@ -513,20 +544,90 @@ export default function AppIndex() {
     return ["all", ...vendors];
   }, [restock]);
 
+  const locationOptions = useMemo(() => {
+    const locations = [];
+    const seen = new Set();
+
+    restock.forEach((item) => {
+      (item.locationInventory || []).forEach((location) => {
+        if (!location?.id || seen.has(location.id)) return;
+        seen.add(location.id);
+        locations.push({
+          id: location.id,
+          name: location.name || "Unknown location",
+        });
+      });
+    });
+
+    return locations.sort((a, b) => a.name.localeCompare(b.name));
+  }, [restock]);
+
+  const normalizedSelectedLocationIds = useMemo(() => {
+    if (selectedLocationIds.length === 0) return [];
+    const validIds = new Set(locationOptions.map((location) => location.id));
+    return selectedLocationIds.filter((id) => validIds.has(id));
+  }, [locationOptions, selectedLocationIds]);
+
+  const allLocationsSelected =
+    locationOptions.length === 0 ||
+    normalizedSelectedLocationIds.length === 0 ||
+    normalizedSelectedLocationIds.length === locationOptions.length;
+
+  const selectedLocationSummary = allLocationsSelected
+    ? "All locations"
+    : normalizedSelectedLocationIds.length === 1
+      ? locationOptions.find(
+          (location) => location.id === normalizedSelectedLocationIds[0],
+        )?.name || "1 location"
+      : `${normalizedSelectedLocationIds.length} locations`;
+
+  const locationFilteredRestock = useMemo(() => {
+    return restock
+      .map((item) => {
+        const selectedInventory = (item.locationInventory || [])
+          .filter(
+            (location) =>
+              allLocationsSelected ||
+              normalizedSelectedLocationIds.includes(location.id),
+          )
+          .reduce((sum, location) => sum + Number(location.quantity || 0), 0);
+
+        return {
+          ...item,
+          inventory: selectedInventory,
+          shortage: Math.max(Number(item.totalUnfulfilled || 0) - selectedInventory, 0),
+        };
+      })
+      .filter((item) => Number(item.shortage || 0) > 0);
+  }, [allLocationsSelected, normalizedSelectedLocationIds, restock]);
+
   const filteredRestock = useMemo(() => {
-    if (selectedVendor === "all") return restock;
-    return restock.filter((item) => (item.vendor || "—") === selectedVendor);
-  }, [restock, selectedVendor]);
+    if (selectedVendor === "all") return locationFilteredRestock;
+    return locationFilteredRestock.filter(
+      (item) => (item.vendor || "—") === selectedVendor,
+    );
+  }, [locationFilteredRestock, selectedVendor]);
+
+  const filteredRestockKeys = useMemo(
+    () => new Set(filteredRestock.map((item) => String(item.key || ""))),
+    [filteredRestock],
+  );
 
   const filteredOrders = useMemo(() => {
-    if (selectedVendor === "all") return orders;
+    return orders
+      .map((order) => {
+        const backorderedLineItems = (order.backorderedLineItems || []).filter((item) =>
+          filteredRestockKeys.has(String(item.key || "")),
+        );
 
-    return orders.filter((order) =>
-      order.backorderedLineItems.some(
-        (item) => (item.vendor || "—") === selectedVendor,
-      ),
-    );
-  }, [orders, selectedVendor]);
+        return {
+          ...order,
+          backorderedLineItems,
+          unfulfilledItems: backorderedLineItems.length,
+        };
+      })
+      .filter((order) => order.unfulfilledItems > 0);
+  }, [filteredRestockKeys, orders]);
 
   const statusLabel = (status) => {
     if (!status) return "Unknown";
@@ -922,6 +1023,62 @@ export default function AppIndex() {
     background: "#ffffff",
     minWidth: "220px",
     outline: "none",
+  };
+
+  const filterGroupStyle = {
+    display: "grid",
+    gap: "4px",
+  };
+
+  const locationPopoverStyle = {
+    position: "relative",
+  };
+
+  const locationButtonStyle = {
+    appearance: "none",
+    border: "1px solid #cfd8e6",
+    background: "#ffffff",
+    color: "#17212b",
+    padding: "8px 12px",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontFamily: fontStack,
+    fontSize: "12px",
+    fontWeight: 500,
+    minWidth: "220px",
+    textAlign: "left",
+  };
+
+  const locationMenuStyle = {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    left: 0,
+    zIndex: 20,
+    minWidth: "280px",
+    maxHeight: "280px",
+    overflowY: "auto",
+    background: "#ffffff",
+    border: "1px solid #dbe3ef",
+    borderRadius: "12px",
+    boxShadow: "0 10px 30px rgba(15, 23, 42, 0.12)",
+    padding: "8px",
+  };
+
+  const locationOptionRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "7px 8px",
+    borderRadius: "8px",
+    fontSize: "12px",
+    color: "#17212b",
+    cursor: "pointer",
+  };
+
+  const locationHintStyle = {
+    fontSize: "11px",
+    color: "#667085",
+    padding: "2px 8px 6px 8px",
   };
 
   const exportButtonStyle = {
@@ -1323,6 +1480,38 @@ export default function AppIndex() {
     setAnalyticsDrilldown({ type: null, label: null });
   };
 
+  const handleLocationToggle = (locationId) => {
+    setExpandedRestockKey(null);
+    setAnalyticsDrilldown({ type: null, label: null });
+    setSelectedLocationIds((current) => {
+      if (current.length === 0) {
+        return locationOptions
+          .map((location) => location.id)
+          .filter((id) => id !== locationId);
+      }
+
+      if (current.includes(locationId)) {
+        const next = current.filter((id) => id !== locationId);
+        if (next.length === 0 || next.length === locationOptions.length) {
+          return [];
+        }
+        return next;
+      }
+
+      const next = [...current, locationId];
+      if (next.length === locationOptions.length) {
+        return [];
+      }
+      return next;
+    });
+  };
+
+  const handleAllLocationsToggle = () => {
+    setExpandedRestockKey(null);
+    setAnalyticsDrilldown({ type: null, label: null });
+    setSelectedLocationIds([]);
+  };
+
   const handleAnalyticsVendorClick = (item) => {
     setSelectedVendor(item.label === selectedVendor ? "all" : item.label);
     setAnalyticsDrilldown({ type: null, label: null });
@@ -1372,6 +1561,7 @@ export default function AppIndex() {
       vendor: item.vendor,
       totalUnfulfilled: item.totalUnfulfilled,
       inventory: item.inventory,
+      locations: selectedLocationSummary,
       totalShortage: item.shortage,
       affectedOrders: item.affectedOrders.length,
     }));
@@ -1382,6 +1572,7 @@ export default function AppIndex() {
       "Vendor",
       "Total Unfulfilled",
       "Inventory",
+      "Locations",
       "Total Shortage",
       "Affected Orders",
     ];
@@ -1395,6 +1586,7 @@ export default function AppIndex() {
           csvEscape(row.vendor),
           csvEscape(row.totalUnfulfilled),
           csvEscape(row.inventory),
+          csvEscape(row.locations),
           csvEscape(row.totalShortage),
           csvEscape(row.affectedOrders),
         ].join(","),
@@ -1411,7 +1603,12 @@ export default function AppIndex() {
         ? "all-vendors"
         : selectedVendor.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
-    const fileName = `backorder-restock-${vendorSlug}.csv`;
+    const locationSlug =
+      allLocationsSelected
+        ? "all-locations"
+        : selectedLocationSummary.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+    const fileName = `backorder-restock-${vendorSlug}-${locationSlug}.csv`;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
 
@@ -1574,24 +1771,58 @@ export default function AppIndex() {
             </div>
 
             <div style={toolbarStyle}>
-              <label htmlFor="vendor-filter" style={labelStyle}>
-                Filter by vendor
-              </label>
-              <select
-                id="vendor-filter"
-                value={selectedVendor}
-                onChange={(event) => {
-                  setSelectedVendor(event.target.value);
-                  setExpandedRestockKey(null);
-                }}
-                style={selectStyle}
-              >
-                {vendorOptions.map((vendor) => (
-                  <option key={vendor} value={vendor}>
-                    {vendor === "all" ? "All vendors" : vendor}
-                  </option>
-                ))}
-              </select>
+              <div style={filterGroupStyle}>
+                <label htmlFor="vendor-filter" style={labelStyle}>
+                  Filter by vendor
+                </label>
+                <select
+                  id="vendor-filter"
+                  value={selectedVendor}
+                  onChange={(event) => {
+                    setSelectedVendor(event.target.value);
+                    setExpandedRestockKey(null);
+                  }}
+                  style={selectStyle}
+                >
+                  {vendorOptions.map((vendor) => (
+                    <option key={vendor} value={vendor}>
+                      {vendor === "all" ? "All vendors" : vendor}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={filterGroupStyle}>
+                <span style={labelStyle}>Inventory locations</span>
+                <details style={locationPopoverStyle}>
+                  <summary style={locationButtonStyle}>
+                    {selectedLocationSummary}
+                  </summary>
+                  <div style={locationMenuStyle}>
+                    <label style={locationOptionRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={allLocationsSelected}
+                        onChange={handleAllLocationsToggle}
+                      />
+                      <span>All locations</span>
+                    </label>
+                    <div style={locationHintStyle}>
+                      Choose one or more locations to recalculate available inventory.
+                    </div>
+                    {locationOptions.map((location) => (
+                      <label key={location.id} style={locationOptionRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                          onChange={() => handleLocationToggle(location.id)}
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              </div>
 
               <button
                 type="button"
@@ -1609,7 +1840,7 @@ export default function AppIndex() {
 
             {groupedRestock.length === 0 ? (
               <div style={emptyStateStyle}>
-                No restock shortages found for this vendor.
+                No restock shortages found for the current vendor and location filter.
               </div>
             ) : (
               <div style={vendorGroupWrapStyle}>
@@ -1635,7 +1866,7 @@ export default function AppIndex() {
                             <th style={headerCell}>SKU</th>
                             <th style={headerCell}>Product</th>
                             <th style={headerCell}>Total Unfulfilled</th>
-                            <th style={headerCell}>Inventory</th>
+                            <th style={headerCell}>Selected Inventory</th>
                             <th style={headerCell}>Total Shortage</th>
                           </tr>
                         </thead>
@@ -1759,21 +1990,55 @@ export default function AppIndex() {
             </div>
 
             <div style={toolbarStyle}>
-              <label htmlFor="analytics-vendor-filter" style={labelStyle}>
-                Filter analytics by vendor
-              </label>
-              <select
-                id="analytics-vendor-filter"
-                value={selectedVendor}
-                onChange={(event) => handleVendorFilterChange(event.target.value)}
-                style={selectStyle}
-              >
-                {vendorOptions.map((vendor) => (
-                  <option key={vendor} value={vendor}>
-                    {vendor === "all" ? "All vendors" : vendor}
-                  </option>
-                ))}
-              </select>
+              <div style={filterGroupStyle}>
+                <label htmlFor="analytics-vendor-filter" style={labelStyle}>
+                  Filter analytics by vendor
+                </label>
+                <select
+                  id="analytics-vendor-filter"
+                  value={selectedVendor}
+                  onChange={(event) => handleVendorFilterChange(event.target.value)}
+                  style={selectStyle}
+                >
+                  {vendorOptions.map((vendor) => (
+                    <option key={vendor} value={vendor}>
+                      {vendor === "all" ? "All vendors" : vendor}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={filterGroupStyle}>
+                <span style={labelStyle}>Inventory locations</span>
+                <details style={locationPopoverStyle}>
+                  <summary style={locationButtonStyle}>
+                    {selectedLocationSummary}
+                  </summary>
+                  <div style={locationMenuStyle}>
+                    <label style={locationOptionRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={allLocationsSelected}
+                        onChange={handleAllLocationsToggle}
+                      />
+                      <span>All locations</span>
+                    </label>
+                    <div style={locationHintStyle}>
+                      Choose one or more locations to recalculate analytics from available inventory.
+                    </div>
+                    {locationOptions.map((location) => (
+                      <label key={location.id} style={locationOptionRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                          onChange={() => handleLocationToggle(location.id)}
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              </div>
 
               <div style={resultCountStyle}>
                 {analytics.filteredSummary.openBackorderOrders} order
