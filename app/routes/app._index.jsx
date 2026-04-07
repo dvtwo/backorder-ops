@@ -604,12 +604,14 @@ export default function AppIndex() {
   const [activeTab, setActiveTab] = useState("backorders");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
+  const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [expandedRestockKey, setExpandedRestockKey] = useState(null);
   const [analyticsDrilldown, setAnalyticsDrilldown] = useState({
     type: null,
     label: null,
   });
   const analyticsDrilldownRef = useRef(null);
+  const locationMenuRef = useRef(null);
 
   const vendorOptions = useMemo(() => {
     const vendors = Array.from(
@@ -647,13 +649,28 @@ export default function AppIndex() {
     normalizedSelectedLocationIds.length === 0 ||
     normalizedSelectedLocationIds.length === locationOptions.length;
 
+  const getShortLocationName = (name) => {
+    const cleaned = String(name || "")
+      .replace(/\s+warehouse$/i, "")
+      .replace(/\s+location$/i, "")
+      .trim();
+
+    return cleaned || "Unknown";
+  };
+
   const selectedLocationSummary = allLocationsSelected
     ? "All locations"
-    : normalizedSelectedLocationIds.length === 1
-      ? locationOptions.find(
-          (location) => location.id === normalizedSelectedLocationIds[0],
-        )?.name || "1 location"
-      : `${normalizedSelectedLocationIds.length} locations`;
+    : (() => {
+        const selectedNames = locationOptions
+          .filter((location) => normalizedSelectedLocationIds.includes(location.id))
+          .map((location) => getShortLocationName(location.name));
+
+        if (selectedNames.length <= 2) {
+          return selectedNames.join(", ");
+        }
+
+        return `${selectedNames.slice(0, 2).join(", ")} (+${selectedNames.length - 2})`;
+      })();
 
   const locationFilteredRestock = useMemo(() => {
     return restock
@@ -933,6 +950,31 @@ export default function AppIndex() {
     });
   }, [activeTab, analytics.drilldownRows.length, analyticsDrilldown.type]);
 
+  useEffect(() => {
+    if (!locationMenuOpen) return undefined;
+
+    const handlePointerDown = (event) => {
+      if (locationMenuRef.current?.contains(event.target)) return;
+      setLocationMenuOpen(false);
+    };
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setLocationMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [locationMenuOpen]);
+
   const fontStack =
     '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
@@ -1135,7 +1177,7 @@ export default function AppIndex() {
 
   const locationButtonStyle = {
     appearance: "none",
-    border: "1px solid #cfd8e6",
+    border: locationMenuOpen ? "1px solid #3b82f6" : "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
     padding: "0 12px",
@@ -1152,7 +1194,7 @@ export default function AppIndex() {
     alignItems: "center",
     justifyContent: "space-between",
     gap: "8px",
-    listStyle: "none",
+    boxShadow: locationMenuOpen ? "0 0 0 2px rgba(59, 130, 246, 0.12)" : "none",
   };
 
   const locationSummaryTextStyle = {
@@ -1194,6 +1236,15 @@ export default function AppIndex() {
     fontSize: "12px",
     color: "#17212b",
     cursor: "pointer",
+    userSelect: "none",
+  };
+
+  const locationCheckboxStyle = {
+    width: "14px",
+    height: "14px",
+    margin: 0,
+    accentColor: "#2563eb",
+    flexShrink: 0,
   };
 
   const locationHintStyle = {
@@ -1602,6 +1653,7 @@ export default function AppIndex() {
   const handleVendorFilterChange = (value) => {
     setSelectedVendor(value);
     setAnalyticsDrilldown({ type: null, label: null });
+    setLocationMenuOpen(false);
   };
 
   const handleLocationToggle = (locationId) => {
@@ -1634,6 +1686,7 @@ export default function AppIndex() {
     setExpandedRestockKey(null);
     setAnalyticsDrilldown({ type: null, label: null });
     setSelectedLocationIds([]);
+    setLocationMenuOpen(false);
   };
 
   const handleAnalyticsVendorClick = (item) => {
@@ -1906,6 +1959,7 @@ export default function AppIndex() {
                     onChange={(event) => {
                       setSelectedVendor(event.target.value);
                       setExpandedRestockKey(null);
+                      setLocationMenuOpen(false);
                     }}
                     style={selectStyle}
                   >
@@ -1919,35 +1973,45 @@ export default function AppIndex() {
 
                 <div style={filterGroupStyle}>
                   <span style={labelStyle}>Inventory locations</span>
-                  <details style={locationPopoverStyle}>
-                    <summary style={locationButtonStyle}>
+                  <div style={locationPopoverStyle} ref={locationMenuRef}>
+                    <button
+                      type="button"
+                      style={locationButtonStyle}
+                      onClick={() => setLocationMenuOpen((current) => !current)}
+                      aria-expanded={locationMenuOpen}
+                      aria-haspopup="menu"
+                    >
                       <span style={locationSummaryTextStyle}>{selectedLocationSummary}</span>
-                      <span style={locationChevronStyle}>▾</span>
-                    </summary>
-                    <div style={locationMenuStyle}>
-                      <label style={locationOptionRowStyle}>
-                        <input
-                          type="checkbox"
-                          checked={allLocationsSelected}
-                          onChange={handleAllLocationsToggle}
-                        />
-                        <span>All locations</span>
-                      </label>
-                      <div style={locationHintStyle}>
-                        Choose one or more locations to recalculate available inventory.
-                      </div>
-                      {locationOptions.map((location) => (
-                        <label key={location.id} style={locationOptionRowStyle}>
+                      <span style={locationChevronStyle}>{locationMenuOpen ? "▴" : "▾"}</span>
+                    </button>
+                    {locationMenuOpen ? (
+                      <div style={locationMenuStyle}>
+                        <label style={locationOptionRowStyle}>
                           <input
                             type="checkbox"
-                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                            onChange={() => handleLocationToggle(location.id)}
+                            checked={allLocationsSelected}
+                            onChange={handleAllLocationsToggle}
+                            style={locationCheckboxStyle}
                           />
-                          <span>{location.name}</span>
+                          <span>All locations</span>
                         </label>
-                      ))}
-                    </div>
-                  </details>
+                        <div style={locationHintStyle}>
+                          Choose one or more locations to recalculate available inventory.
+                        </div>
+                        {locationOptions.map((location) => (
+                          <label key={location.id} style={locationOptionRowStyle}>
+                            <input
+                              type="checkbox"
+                              checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                              onChange={() => handleLocationToggle(location.id)}
+                              style={locationCheckboxStyle}
+                            />
+                            <span>{location.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
@@ -2139,34 +2203,45 @@ export default function AppIndex() {
 
               <div style={filterGroupStyle}>
                 <span style={labelStyle}>Inventory locations</span>
-                <details style={locationPopoverStyle}>
-                  <summary style={locationButtonStyle}>
-                    {selectedLocationSummary}
-                  </summary>
-                  <div style={locationMenuStyle}>
-                    <label style={locationOptionRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={allLocationsSelected}
-                        onChange={handleAllLocationsToggle}
-                      />
-                      <span>All locations</span>
-                    </label>
-                    <div style={locationHintStyle}>
-                      Choose one or more locations to recalculate analytics from available inventory.
-                    </div>
-                    {locationOptions.map((location) => (
-                      <label key={location.id} style={locationOptionRowStyle}>
+                <div style={locationPopoverStyle} ref={locationMenuRef}>
+                  <button
+                    type="button"
+                    style={locationButtonStyle}
+                    onClick={() => setLocationMenuOpen((current) => !current)}
+                    aria-expanded={locationMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    <span style={locationSummaryTextStyle}>{selectedLocationSummary}</span>
+                    <span style={locationChevronStyle}>{locationMenuOpen ? "▴" : "▾"}</span>
+                  </button>
+                  {locationMenuOpen ? (
+                    <div style={locationMenuStyle}>
+                      <label style={locationOptionRowStyle}>
                         <input
                           type="checkbox"
-                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                          onChange={() => handleLocationToggle(location.id)}
+                          checked={allLocationsSelected}
+                          onChange={handleAllLocationsToggle}
+                          style={locationCheckboxStyle}
                         />
-                        <span>{location.name}</span>
+                        <span>All locations</span>
                       </label>
-                    ))}
-                  </div>
-                </details>
+                      <div style={locationHintStyle}>
+                        Choose one or more locations to recalculate analytics from available inventory.
+                      </div>
+                      {locationOptions.map((location) => (
+                        <label key={location.id} style={locationOptionRowStyle}>
+                          <input
+                            type="checkbox"
+                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                            onChange={() => handleLocationToggle(location.id)}
+                            style={locationCheckboxStyle}
+                          />
+                          <span>{location.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div style={resultCountStyle}>
