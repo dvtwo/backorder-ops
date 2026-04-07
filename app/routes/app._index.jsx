@@ -1585,8 +1585,10 @@ export default function AppIndex() {
     borderLeft: "1px solid #dbe3ef",
     boxShadow: "-18px 0 40px rgba(15, 23, 42, 0.14)",
     zIndex: 50,
-    display: "grid",
-    gridTemplateRows: "auto 1fr",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    minHeight: 0,
   };
 
   const drawerHeaderWrapStyle = {
@@ -1595,6 +1597,7 @@ export default function AppIndex() {
     background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
     display: "grid",
     gap: "12px",
+    flexShrink: 0,
   };
 
   const drawerCloseButtonStyle = {
@@ -1610,7 +1613,12 @@ export default function AppIndex() {
   };
 
   const drawerBodyStyle = {
+    flex: 1,
+    minHeight: 0,
     overflowY: "auto",
+    overflowX: "hidden",
+    WebkitOverflowScrolling: "touch",
+    overscrollBehavior: "contain",
     padding: "18px 20px 24px 20px",
     display: "grid",
     gap: "16px",
