@@ -2,45 +2,42 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 
+const chunkArray = (items, size) => {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
+
 export const loader = async ({ request }) => {
   try {
     const { admin, session } = await authenticate.admin(request);
 
-    const response = await admin.graphql(`
-      query BackorderOrders {
-        orders(first: 100) {
-          edges {
-            node {
-              id
-              name
-              createdAt
-              displayFulfillmentStatus
-              lineItems(first: 50) {
-                edges {
-                  node {
-                    id
-                    title
-                    quantity
-                    unfulfilledQuantity
-                    sku
-                    vendor
-                    variant {
+    const ordersResponse = await admin.graphql(
+      `#graphql
+        query BackorderOrders {
+          orders(first: 100) {
+            edges {
+              node {
+                id
+                name
+                createdAt
+                displayFulfillmentStatus
+                lineItems(first: 50) {
+                  edges {
+                    node {
                       id
-                      inventoryQuantity
-                      inventoryItem {
-                        inventoryLevels(first: 50) {
-                          edges {
-                            node {
-                              location {
-                                id
-                                name
-                              }
-                              quantities(names: ["available"]) {
-                                name
-                                quantity
-                              }
-                            }
-                          }
+                      title
+                      quantity
+                      unfulfilledQuantity
+                      sku
+                      vendor
+                      variant {
+                        id
+                        inventoryQuantity
+                        inventoryItem {
+                          id
                         }
                       }
                     }
@@ -50,12 +47,12 @@ export const loader = async ({ request }) => {
             }
           }
         }
-      }
-    `);
+      `,
+    );
 
-    const result = await response.json();
+    const ordersResult = await ordersResponse.json();
 
-    if (result.errors?.length) {
+    if (ordersResult.errors?.length) {
       return {
         shop: session.shop,
         orders: [],
@@ -66,15 +63,103 @@ export const loader = async ({ request }) => {
           totalShortageUnits: 0,
           vendorsAffected: 0,
         },
-        ordersError: result.errors[0]?.message || "GraphQL query failed",
+        ordersError: ordersResult.errors[0]?.message || 'GraphQL query failed',
       };
     }
 
-    const rawOrders = result?.data?.orders?.edges || [];
+    const rawOrders = ordersResult?.data?.orders?.edges || [];
+
+    const inventoryItemIds = Array.from(
+      new Set(
+        rawOrders.flatMap(({ node }) =>
+          ((node?.lineItems?.edges || []).map((edge) => edge?.node) || [])
+            .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
+            .map((item) => item?.variant?.inventoryItem?.id)
+            .filter(Boolean),
+        ),
+      ),
+    );
+
+    const inventoryByItemId = {};
+    const inventoryChunks = chunkArray(inventoryItemIds, 20);
+
+    for (const ids of inventoryChunks) {
+      const inventoryResponse = await admin.graphql(
+        `#graphql
+          query InventoryItemLocations($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on InventoryItem {
+                id
+                inventoryLevels(first: 50) {
+                  edges {
+                    node {
+                      location {
+                        id
+                        name
+                      }
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `,
+        { variables: { ids } },
+      );
+
+      const inventoryResult = await inventoryResponse.json();
+
+      if (inventoryResult.errors?.length) {
+        return {
+          shop: session.shop,
+          orders: [],
+          restock: [],
+          summary: {
+            openBackorderOrders: 0,
+            totalAffectedSkus: 0,
+            totalShortageUnits: 0,
+            vendorsAffected: 0,
+          },
+          ordersError:
+            inventoryResult.errors[0]?.message || 'Inventory query failed',
+        };
+      }
+
+      (inventoryResult?.data?.nodes || []).forEach((inventoryItem) => {
+        if (!inventoryItem?.id) return;
+
+        const locationInventory = (inventoryItem?.inventoryLevels?.edges || []).map(
+          ({ node: level }) => ({
+            id: level?.location?.id || '',
+            name: level?.location?.name || 'Unknown location',
+            quantity: Math.max(
+              Number(
+                level?.quantities?.find((quantity) => quantity?.name === 'available')
+                  ?.quantity || 0,
+              ),
+              0,
+            ),
+          }),
+        );
+
+        inventoryByItemId[inventoryItem.id] = {
+          locationInventory,
+          inventory: locationInventory.reduce(
+            (sum, level) => sum + Number(level.quantity || 0),
+            0,
+          ),
+        };
+      });
+    }
+
     const skuMap = {};
 
     rawOrders.forEach(({ node }) => {
-      const adminOrderId = node.id?.split("/").pop() || "";
+      const adminOrderId = node.id?.split('/').pop() || '';
       const lineItems = (node.lineItems?.edges || []).map((e) => e.node);
 
       lineItems.forEach((item) => {
@@ -82,35 +167,24 @@ export const loader = async ({ request }) => {
         if (unfulfilled <= 0) return;
 
         const key = item.variant?.id || item.sku || item.title;
-        const inventoryLevels = item.variant?.inventoryItem?.inventoryLevels?.edges || [];
-        const locationInventory = inventoryLevels.map(({ node: level }) => ({
-          id: level?.location?.id || "",
-          name: level?.location?.name || "Unknown location",
-          quantity: Math.max(
-            Number(
-              level?.quantities?.find((quantity) => quantity?.name === "available")
-                ?.quantity || 0,
-            ),
-            0,
-          ),
-        }));
-        const inventory = locationInventory.reduce(
-          (sum, level) => sum + Number(level.quantity || 0),
-          0,
-        );
+        const inventoryItemId = item.variant?.inventoryItem?.id || null;
+        const inventoryRecord = inventoryByItemId[inventoryItemId] || {
+          inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
+          locationInventory: [],
+        };
 
         if (!skuMap[key]) {
           skuMap[key] = {
             key,
-            sku: item.sku || "—",
+            sku: item.sku || '—',
             product: item.title,
-            vendor: item.vendor || "—",
+            vendor: item.vendor || '—',
             variantId: item.variant?.id || null,
-            inventory,
+            inventory: inventoryRecord.inventory,
             totalUnfulfilled: 0,
             shortage: 0,
             affectedOrders: [],
-            locationInventory,
+            locationInventory: inventoryRecord.locationInventory,
           };
         }
 
@@ -149,11 +223,11 @@ export const loader = async ({ request }) => {
           .map((item) => ({
             id: item.id,
             key: item.variant?.id || item.sku || item.title,
-            sku: item.sku || "—",
-            vendor: item.vendor || "—",
+            sku: item.sku || '—',
+            vendor: item.vendor || '—',
           }));
 
-        const adminOrderId = node.id?.split("/").pop() || "";
+        const adminOrderId = node.id?.split('/').pop() || '';
 
         return {
           id: node.id,
@@ -171,7 +245,7 @@ export const loader = async ({ request }) => {
     const restock = Object.values(skuMap)
       .filter((item) => item.shortage > 0)
       .sort((a, b) => {
-        const vendorCompare = (a.vendor || "—").localeCompare(b.vendor || "—");
+        const vendorCompare = (a.vendor || '—').localeCompare(b.vendor || '—');
         if (vendorCompare !== 0) return vendorCompare;
         return b.shortage - a.shortage;
       });
@@ -183,7 +257,7 @@ export const loader = async ({ request }) => {
         (sum, item) => sum + Number(item.shortage || 0),
         0,
       ),
-      vendorsAffected: new Set(restock.map((item) => item.vendor || "—")).size,
+      vendorsAffected: new Set(restock.map((item) => item.vendor || '—')).size,
     };
 
     return {
@@ -191,11 +265,11 @@ export const loader = async ({ request }) => {
       orders,
       restock,
       summary,
-      ordersError: "",
+      ordersError: '',
     };
   } catch (error) {
     return {
-      shop: "",
+      shop: '',
       orders: [],
       restock: [],
       summary: {
@@ -205,7 +279,7 @@ export const loader = async ({ request }) => {
         vendorsAffected: 0,
       },
       ordersError:
-        error instanceof Error ? error.message : "Failed to load data",
+        error instanceof Error ? error.message : 'Failed to load data',
     };
   }
 };
