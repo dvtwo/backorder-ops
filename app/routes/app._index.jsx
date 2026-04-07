@@ -1580,7 +1580,8 @@ export default function AppIndex() {
     top: 0,
     right: 0,
     width: "min(520px, 96vw)",
-    height: "100vh",
+    height: "100dvh",
+    maxHeight: "100dvh",
     background: "#ffffff",
     borderLeft: "1px solid #dbe3ef",
     boxShadow: "-18px 0 40px rgba(15, 23, 42, 0.14)",
@@ -1588,6 +1589,7 @@ export default function AppIndex() {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
+    overscrollBehavior: "contain",
     minHeight: 0,
   };
 
@@ -1613,14 +1615,17 @@ export default function AppIndex() {
   };
 
   const drawerBodyStyle = {
-    flex: 1,
+    flex: "1 1 auto",
     minHeight: 0,
-    overflowY: "auto",
+    height: 0,
+    overflowY: "scroll",
     overflowX: "hidden",
     WebkitOverflowScrolling: "touch",
     overscrollBehavior: "contain",
-    padding: "18px 20px 24px 20px",
-    display: "grid",
+    touchAction: "pan-y",
+    padding: "18px 20px calc(40px + env(safe-area-inset-bottom, 0px)) 20px",
+    display: "flex",
+    flexDirection: "column",
     gap: "16px",
   };
 
