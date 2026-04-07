@@ -1073,39 +1073,64 @@ export default function AppIndex() {
 
   const toolbarStyle = {
     display: "flex",
-    alignItems: "center",
-    gap: "10px",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: "14px",
     flexWrap: "wrap",
     padding: "12px 18px",
     borderBottom: "1px solid #e7edf5",
     background: "#fcfdff",
   };
 
+  const toolbarLeftStyle = {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: "14px",
+    flexWrap: "wrap",
+    flex: "1 1 560px",
+  };
+
+  const toolbarRightStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "12px",
+    flex: "0 0 auto",
+    marginLeft: "auto",
+  };
+
   const labelStyle = {
     fontSize: "12px",
     fontWeight: 600,
     color: "#475467",
+    lineHeight: 1.2,
   };
 
   const selectStyle = {
     fontFamily: fontStack,
     fontSize: "12px",
     color: "#17212b",
-    padding: "8px 12px",
+    padding: "0 12px",
     borderRadius: "10px",
     border: "1px solid #cfd8e6",
     background: "#ffffff",
-    minWidth: "220px",
+    minWidth: "0",
+    width: "100%",
+    height: "44px",
     outline: "none",
+    boxSizing: "border-box",
   };
 
   const filterGroupStyle = {
     display: "grid",
-    gap: "4px",
+    gap: "6px",
+    minWidth: "240px",
+    flex: "1 1 240px",
   };
 
   const locationPopoverStyle = {
     position: "relative",
+    width: "100%",
   };
 
   const locationButtonStyle = {
@@ -1113,14 +1138,36 @@ export default function AppIndex() {
     border: "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
-    padding: "8px 12px",
+    padding: "0 12px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "12px",
     fontWeight: 500,
-    minWidth: "220px",
+    width: "100%",
+    height: "44px",
     textAlign: "left",
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    listStyle: "none",
+  };
+
+  const locationSummaryTextStyle = {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    flex: 1,
+  };
+
+  const locationChevronStyle = {
+    color: "#667085",
+    fontSize: "11px",
+    lineHeight: 1,
+    flexShrink: 0,
   };
 
   const locationMenuStyle = {
@@ -1160,18 +1207,21 @@ export default function AppIndex() {
     border: "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
-    padding: "8px 12px",
+    padding: "0 16px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "12px",
     fontWeight: 600,
+    height: "44px",
+    whiteSpace: "nowrap",
   };
 
   const resultCountStyle = {
     fontSize: "12px",
     color: "#667085",
     fontWeight: 500,
+    whiteSpace: "nowrap",
   };
 
   const tableWrapStyle = {
@@ -1845,70 +1895,75 @@ export default function AppIndex() {
             </div>
 
             <div style={toolbarStyle}>
-              <div style={filterGroupStyle}>
-                <label htmlFor="vendor-filter" style={labelStyle}>
-                  Filter by vendor
-                </label>
-                <select
-                  id="vendor-filter"
-                  value={selectedVendor}
-                  onChange={(event) => {
-                    setSelectedVendor(event.target.value);
-                    setExpandedRestockKey(null);
-                  }}
-                  style={selectStyle}
-                >
-                  {vendorOptions.map((vendor) => (
-                    <option key={vendor} value={vendor}>
-                      {vendor === "all" ? "All vendors" : vendor}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div style={toolbarLeftStyle}>
+                <div style={filterGroupStyle}>
+                  <label htmlFor="vendor-filter" style={labelStyle}>
+                    Filter by vendor
+                  </label>
+                  <select
+                    id="vendor-filter"
+                    value={selectedVendor}
+                    onChange={(event) => {
+                      setSelectedVendor(event.target.value);
+                      setExpandedRestockKey(null);
+                    }}
+                    style={selectStyle}
+                  >
+                    {vendorOptions.map((vendor) => (
+                      <option key={vendor} value={vendor}>
+                        {vendor === "all" ? "All vendors" : vendor}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              <div style={filterGroupStyle}>
-                <span style={labelStyle}>Inventory locations</span>
-                <details style={locationPopoverStyle}>
-                  <summary style={locationButtonStyle}>
-                    {selectedLocationSummary}
-                  </summary>
-                  <div style={locationMenuStyle}>
-                    <label style={locationOptionRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={allLocationsSelected}
-                        onChange={handleAllLocationsToggle}
-                      />
-                      <span>All locations</span>
-                    </label>
-                    <div style={locationHintStyle}>
-                      Choose one or more locations to recalculate available inventory.
-                    </div>
-                    {locationOptions.map((location) => (
-                      <label key={location.id} style={locationOptionRowStyle}>
+                <div style={filterGroupStyle}>
+                  <span style={labelStyle}>Inventory locations</span>
+                  <details style={locationPopoverStyle}>
+                    <summary style={locationButtonStyle}>
+                      <span style={locationSummaryTextStyle}>{selectedLocationSummary}</span>
+                      <span style={locationChevronStyle}>▾</span>
+                    </summary>
+                    <div style={locationMenuStyle}>
+                      <label style={locationOptionRowStyle}>
                         <input
                           type="checkbox"
-                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                          onChange={() => handleLocationToggle(location.id)}
+                          checked={allLocationsSelected}
+                          onChange={handleAllLocationsToggle}
                         />
-                        <span>{location.name}</span>
+                        <span>All locations</span>
                       </label>
-                    ))}
-                  </div>
-                </details>
+                      <div style={locationHintStyle}>
+                        Choose one or more locations to recalculate available inventory.
+                      </div>
+                      {locationOptions.map((location) => (
+                        <label key={location.id} style={locationOptionRowStyle}>
+                          <input
+                            type="checkbox"
+                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                            onChange={() => handleLocationToggle(location.id)}
+                          />
+                          <span>{location.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
               </div>
 
-              <button
-                type="button"
-                onClick={exportRestockCsv}
-                style={exportButtonStyle}
-              >
-                Export CSV
-              </button>
+              <div style={toolbarRightStyle}>
+                <button
+                  type="button"
+                  onClick={exportRestockCsv}
+                  style={exportButtonStyle}
+                >
+                  Export CSV
+                </button>
 
-              <div style={resultCountStyle}>
-                {filteredRestock.length} result
-                {filteredRestock.length === 1 ? "" : "s"}
+                <div style={resultCountStyle}>
+                  {filteredRestock.length} result
+                  {filteredRestock.length === 1 ? "" : "s"}
+                </div>
               </div>
             </div>
 
