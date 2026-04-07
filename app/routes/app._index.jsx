@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 
@@ -504,6 +504,7 @@ export default function AppIndex() {
     type: null,
     label: null,
   });
+  const analyticsDrilldownRef = useRef(null);
 
   const vendorOptions = useMemo(() => {
     const vendors = Array.from(
@@ -618,18 +619,27 @@ export default function AppIndex() {
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
 
-    const topSkus = filteredRestock
-      .map((item) => ({
-        label: item.sku || item.product,
-        value: Number(item.shortage || 0),
-        sku: item.sku || "—",
-        product: item.product,
-        vendor: item.vendor || "—",
-        key: item.variantId || item.sku || item.product,
-        affectedOrders: item.affectedOrders || [],
-        inventory: Number(item.inventory || 0),
-        totalUnfulfilled: Number(item.totalUnfulfilled || 0),
-      }))
+    const skuLookup = new Map(
+      filteredRestock.map((item) => {
+        const normalizedKey = String(item.variantId || item.sku || item.product || "");
+        return [
+          normalizedKey,
+          {
+            label: item.sku || item.product,
+            value: Number(item.shortage || 0),
+            sku: item.sku || "—",
+            product: item.product,
+            vendor: item.vendor || "—",
+            key: normalizedKey,
+            affectedOrders: item.affectedOrders || [],
+            inventory: Number(item.inventory || 0),
+            totalUnfulfilled: Number(item.totalUnfulfilled || 0),
+          },
+        ];
+      }),
+    );
+
+    const topSkus = Array.from(skuLookup.values())
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
 
@@ -677,11 +687,11 @@ export default function AppIndex() {
     let drilldownRows = [];
 
     if (analyticsDrilldown.type === "sku") {
-      const selectedSku = topSkus.find((item) => item.key === analyticsDrilldown.label);
+      const selectedSku = skuLookup.get(String(analyticsDrilldown.label || ""));
       if (selectedSku) {
         drilldownTitle = `Affected orders for ${selectedSku.sku}`;
-        drilldownRows = selectedSku.affectedOrders.map((affected) => ({
-          id: `${selectedSku.key}-${affected.orderId}-${affected.date}`,
+        drilldownRows = selectedSku.affectedOrders.map((affected, index) => ({
+          id: `${selectedSku.key}-${affected.orderId || index}-${affected.date || index}`,
           orderName: affected.orderName,
           adminOrderId: affected.adminOrderId,
           date: affected.date,
@@ -734,6 +744,19 @@ export default function AppIndex() {
       },
     };
   }, [analyticsDrilldown, filteredOrders, filteredRestock]);
+
+  useEffect(() => {
+    if (activeTab !== "analytics") return;
+    if (!analyticsDrilldown.type) return;
+    if (!analytics.drilldownRows.length) return;
+
+    requestAnimationFrame(() => {
+      analyticsDrilldownRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, [activeTab, analytics.drilldownRows.length, analyticsDrilldown.type]);
 
   const fontStack =
     '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -1306,10 +1329,11 @@ export default function AppIndex() {
   };
 
   const handleAnalyticsSkuClick = (item) => {
+    const normalizedKey = String(item.key || item.sku || item.product || "");
     setAnalyticsDrilldown((current) =>
-      current.type === "sku" && current.label === item.key
+      current.type === "sku" && String(current.label || "") === normalizedKey
         ? { type: null, label: null }
-        : { type: "sku", label: item.key },
+        : { type: "sku", label: normalizedKey },
     );
   };
 
@@ -1829,7 +1853,9 @@ export default function AppIndex() {
                     onItemClick={handleAnalyticsSkuClick}
                     activeLabel={
                       analyticsDrilldown.type === "sku"
-                        ? analytics.topSkus.find((item) => item.key === analyticsDrilldown.label)?.label
+                        ? analytics.topSkus.find(
+                            (item) => String(item.key) === String(analyticsDrilldown.label),
+                          )?.label
                         : null
                     }
                   />
@@ -1910,7 +1936,7 @@ export default function AppIndex() {
                 </div>
 
                 {analytics.drilldownRows.length > 0 ? (
-                  <div style={analyticsDrilldownWrapStyle}>
+                  <div ref={analyticsDrilldownRef} style={analyticsDrilldownWrapStyle}>
                     <div style={analyticsDrilldownCardStyle}>
                       <div style={analyticsDrilldownHeaderStyle}>
                         <h3 style={analyticsDrilldownTitleStyle}>
