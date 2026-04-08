@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useRevalidator } from "react-router";
 import { authenticate } from "../shopify.server";
 
 const chunkArray = (items, size) => {
@@ -10,21 +10,67 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
-export const loader = async ({ request }) => {
-  try {
-    const { admin, session } = await authenticate.admin(request);
+const ORDERS_PAGE_SIZE = 100;
+const LINE_ITEMS_PAGE_SIZE = 100;
+const INVENTORY_BATCH_SIZE = 40;
+const MAX_ORDER_PAGES = 25;
 
-    const ordersResponse = await admin.graphql(
+const emptySummary = {
+  openBackorderOrders: 0,
+  totalAffectedSkus: 0,
+  totalShortageUnits: 0,
+  vendorsAffected: 0,
+};
+
+const emptySyncStats = {
+  orderPages: 0,
+  ordersFetched: 0,
+  lineItemsFetched: 0,
+  extraLineItemQueries: 0,
+  inventoryItemsFetched: 0,
+  truncated: false,
+};
+
+async function graphqlJson(admin, query, variables = {}) {
+  const response = await admin.graphql(query, { variables });
+  const result = await response.json();
+
+  if (result.errors?.length) {
+    throw new Error(result.errors[0]?.message || "GraphQL query failed");
+  }
+
+  return result.data;
+}
+
+async function fetchAllOpenOrders(admin) {
+  const orders = [];
+  let hasNextPage = true;
+  let after = null;
+  let orderPages = 0;
+  let lineItemsFetched = 0;
+  let extraLineItemQueries = 0;
+
+  while (hasNextPage && orderPages < MAX_ORDER_PAGES) {
+    const data = await graphqlJson(
+      admin,
       `#graphql
-        query BackorderOrders {
-          orders(first: 100) {
+        query BackorderOrdersPage($first: Int!, $after: String) {
+          orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true, query: "status:open") {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             edges {
               node {
                 id
                 name
                 createdAt
                 displayFulfillmentStatus
-                lineItems(first: 50) {
+                lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                   edges {
                     node {
                       id
@@ -48,125 +94,183 @@ export const loader = async ({ request }) => {
           }
         }
       `,
+      { first: ORDERS_PAGE_SIZE, after },
     );
 
-    const ordersResult = await ordersResponse.json();
+    const orderConnection = data?.orders;
+    const orderEdges = orderConnection?.edges || [];
+    orderPages += 1;
 
-    if (ordersResult.errors?.length) {
-      return {
-        shop: session.shop,
-        orders: [],
-        restock: [],
-        summary: {
-          openBackorderOrders: 0,
-          totalAffectedSkus: 0,
-          totalShortageUnits: 0,
-          vendorsAffected: 0,
-        },
-        ordersError: ordersResult.errors[0]?.message || 'GraphQL query failed',
-      };
-    }
+    for (const edge of orderEdges) {
+      const order = edge?.node;
+      if (!order?.id) continue;
 
-    const rawOrders = ordersResult?.data?.orders?.edges || [];
+      const initialLineItemEdges = order?.lineItems?.edges || [];
+      const lineItems = initialLineItemEdges.map((lineEdge) => lineEdge?.node).filter(Boolean);
+      lineItemsFetched += lineItems.length;
 
-    const inventoryItemIds = Array.from(
-      new Set(
-        rawOrders.flatMap(({ node }) =>
-          ((node?.lineItems?.edges || []).map((edge) => edge?.node) || [])
-            .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
-            .map((item) => item?.variant?.inventoryItem?.id)
-            .filter(Boolean),
-        ),
-      ),
-    );
+      let lineItemsHasNextPage = Boolean(order?.lineItems?.pageInfo?.hasNextPage);
+      let lineItemsAfter = order?.lineItems?.pageInfo?.endCursor || null;
 
-    const inventoryByItemId = {};
-    const inventoryChunks = chunkArray(inventoryItemIds, 20);
-
-    for (const ids of inventoryChunks) {
-      const inventoryResponse = await admin.graphql(
-        `#graphql
-          query InventoryItemLocations($ids: [ID!]!) {
-            nodes(ids: $ids) {
-              ... on InventoryItem {
+      while (lineItemsHasNextPage) {
+        const lineItemsData = await graphqlJson(
+          admin,
+          `#graphql
+            query BackorderOrderLineItems($id: ID!, $first: Int!, $after: String) {
+              order(id: $id) {
                 id
-                inventoryLevels(first: 50) {
+                lineItems(first: $first, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                   edges {
                     node {
-                      location {
+                      id
+                      title
+                      quantity
+                      unfulfilledQuantity
+                      sku
+                      vendor
+                      variant {
                         id
-                        name
-                      }
-                      quantities(names: ["available"]) {
-                        name
-                        quantity
+                        inventoryQuantity
+                        inventoryItem {
+                          id
+                        }
                       }
                     }
                   }
                 }
               }
             }
-          }
-        `,
-        { variables: { ids } },
-      );
-
-      const inventoryResult = await inventoryResponse.json();
-
-      if (inventoryResult.errors?.length) {
-        return {
-          shop: session.shop,
-          orders: [],
-          restock: [],
-          summary: {
-            openBackorderOrders: 0,
-            totalAffectedSkus: 0,
-            totalShortageUnits: 0,
-            vendorsAffected: 0,
-          },
-          ordersError:
-            inventoryResult.errors[0]?.message || 'Inventory query failed',
-        };
-      }
-
-      (inventoryResult?.data?.nodes || []).forEach((inventoryItem) => {
-        if (!inventoryItem?.id) return;
-
-        const locationInventory = (inventoryItem?.inventoryLevels?.edges || []).map(
-          ({ node: level }) => ({
-            id: level?.location?.id || '',
-            name: level?.location?.name || 'Unknown location',
-            quantity: Math.max(
-              Number(
-                level?.quantities?.find((quantity) => quantity?.name === 'available')
-                  ?.quantity || 0,
-              ),
-              0,
-            ),
-          }),
+          `,
+          { id: order.id, first: LINE_ITEMS_PAGE_SIZE, after: lineItemsAfter },
         );
 
-        inventoryByItemId[inventoryItem.id] = {
-          locationInventory,
-          inventory: locationInventory.reduce(
-            (sum, level) => sum + Number(level.quantity || 0),
-            0,
-          ),
-        };
+        const extraEdges = lineItemsData?.order?.lineItems?.edges || [];
+        const extraNodes = extraEdges.map((lineEdge) => lineEdge?.node).filter(Boolean);
+        lineItems.push(...extraNodes);
+        lineItemsFetched += extraNodes.length;
+        extraLineItemQueries += 1;
+        lineItemsHasNextPage = Boolean(lineItemsData?.order?.lineItems?.pageInfo?.hasNextPage);
+        lineItemsAfter = lineItemsData?.order?.lineItems?.pageInfo?.endCursor || null;
+      }
+
+      orders.push({
+        id: order.id,
+        name: order.name,
+        createdAt: order.createdAt,
+        displayFulfillmentStatus: order.displayFulfillmentStatus,
+        lineItems,
       });
     }
 
+    hasNextPage = Boolean(orderConnection?.pageInfo?.hasNextPage);
+    after = orderConnection?.pageInfo?.endCursor || null;
+  }
+
+  return {
+    orders,
+    stats: {
+      orderPages,
+      ordersFetched: orders.length,
+      lineItemsFetched,
+      extraLineItemQueries,
+      truncated: hasNextPage,
+    },
+  };
+}
+
+async function fetchInventoryByItemId(admin, inventoryItemIds) {
+  const inventoryByItemId = {};
+
+  for (const ids of chunkArray(inventoryItemIds, INVENTORY_BATCH_SIZE)) {
+    const data = await graphqlJson(
+      admin,
+      `#graphql
+        query InventoryItemLocations($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on InventoryItem {
+              id
+              inventoryLevels(first: 100) {
+                edges {
+                  node {
+                    location {
+                      id
+                      name
+                    }
+                    quantities(names: ["available"]) {
+                      name
+                      quantity
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { ids },
+    );
+
+    (data?.nodes || []).forEach((inventoryItem) => {
+      if (!inventoryItem?.id) return;
+
+      const locationInventory = (inventoryItem?.inventoryLevels?.edges || []).map(({ node: level }) => ({
+        id: level?.location?.id || "",
+        name: level?.location?.name || "Unknown location",
+        quantity: Math.max(
+          Number(
+            level?.quantities?.find((quantity) => quantity?.name === "available")
+              ?.quantity || 0,
+          ),
+          0,
+        ),
+      }));
+
+      inventoryByItemId[inventoryItem.id] = {
+        locationInventory,
+        inventory: locationInventory.reduce(
+          (sum, level) => sum + Number(level.quantity || 0),
+          0,
+        ),
+      };
+    });
+  }
+
+  return inventoryByItemId;
+}
+
+export const loader = async ({ request }) => {
+  try {
+    const { admin, session } = await authenticate.admin(request);
+    const loadedAt = new Date().toISOString();
+
+    const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
+
+    const inventoryItemIds = Array.from(
+      new Set(
+        rawOrders
+          .flatMap((order) => order.lineItems || [])
+          .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
+          .map((item) => item?.variant?.inventoryItem?.id)
+          .filter(Boolean),
+      ),
+    );
+
+    const inventoryByItemId = await fetchInventoryByItemId(admin, inventoryItemIds);
     const skuMap = {};
 
-    rawOrders.forEach(({ node }) => {
-      const adminOrderId = node.id?.split('/').pop() || '';
-      const lineItems = (node.lineItems?.edges || []).map((e) => e.node);
+    rawOrders.forEach((node) => {
+      const adminOrderId = node.id?.split("/").pop() || "";
+      const lineItems = node.lineItems || [];
 
       lineItems.forEach((item) => {
         const unfulfilled = Number(item.unfulfilledQuantity || 0);
         if (unfulfilled <= 0) return;
 
-        const key = item.variant?.id || item.sku || item.title;
+        const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
         const inventoryItemId = item.variant?.inventoryItem?.id || null;
         const inventoryRecord = inventoryByItemId[inventoryItemId] || {
           inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
@@ -176,9 +280,9 @@ export const loader = async ({ request }) => {
         if (!skuMap[key]) {
           skuMap[key] = {
             key,
-            sku: item.sku || '—',
+            sku: item.sku || "—",
             product: item.title,
-            vendor: item.vendor || '—',
+            vendor: item.vendor || "—",
             variantId: item.variant?.id || null,
             inventory: inventoryRecord.inventory,
             totalUnfulfilled: 0,
@@ -207,27 +311,27 @@ export const loader = async ({ request }) => {
     });
 
     const orders = rawOrders
-      .map(({ node }) => {
-        const lineItems = (node.lineItems?.edges || []).map((e) => e.node);
+      .map((node) => {
+        const lineItems = node.lineItems || [];
 
         const backorderedLineItems = lineItems
           .filter((item) => {
             const unfulfilled = Number(item.unfulfilledQuantity || 0);
             if (unfulfilled <= 0) return false;
 
-            const key = item.variant?.id || item.sku || item.title;
+            const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
             const aggregate = skuMap[key];
 
             return aggregate && aggregate.shortage > 0;
           })
           .map((item) => ({
             id: item.id,
-            key: item.variant?.id || item.sku || item.title,
-            sku: item.sku || '—',
-            vendor: item.vendor || '—',
+            key: item.variant?.id || item.sku || `${item.title}-${item.id}`,
+            sku: item.sku || "—",
+            vendor: item.vendor || "—",
           }));
 
-        const adminOrderId = node.id?.split('/').pop() || '';
+        const adminOrderId = node.id?.split("/").pop() || "";
 
         return {
           id: node.id,
@@ -245,7 +349,7 @@ export const loader = async ({ request }) => {
     const restock = Object.values(skuMap)
       .filter((item) => item.shortage > 0)
       .sort((a, b) => {
-        const vendorCompare = (a.vendor || '—').localeCompare(b.vendor || '—');
+        const vendorCompare = (a.vendor || "—").localeCompare(b.vendor || "—");
         if (vendorCompare !== 0) return vendorCompare;
         return b.shortage - a.shortage;
       });
@@ -257,7 +361,7 @@ export const loader = async ({ request }) => {
         (sum, item) => sum + Number(item.shortage || 0),
         0,
       ),
-      vendorsAffected: new Set(restock.map((item) => item.vendor || '—')).size,
+      vendorsAffected: new Set(restock.map((item) => item.vendor || "—")).size,
     };
 
     return {
@@ -265,21 +369,23 @@ export const loader = async ({ request }) => {
       orders,
       restock,
       summary,
-      ordersError: '',
+      ordersError: "",
+      loadedAt,
+      syncStats: {
+        ...emptySyncStats,
+        ...stats,
+        inventoryItemsFetched: inventoryItemIds.length,
+      },
     };
   } catch (error) {
     return {
-      shop: '',
+      shop: "",
       orders: [],
       restock: [],
-      summary: {
-        openBackorderOrders: 0,
-        totalAffectedSkus: 0,
-        totalShortageUnits: 0,
-        vendorsAffected: 0,
-      },
-      ordersError:
-        error instanceof Error ? error.message : 'Failed to load data',
+      summary: emptySummary,
+      ordersError: error instanceof Error ? error.message : "Failed to load data",
+      loadedAt: new Date().toISOString(),
+      syncStats: emptySyncStats,
     };
   }
 };
@@ -600,7 +706,9 @@ function TrendChart({ title, subtitle, data, emptyText, onPointClick, activeLabe
 }
 
 export default function AppIndex() {
-  const { shop, orders, restock, summary, ordersError } = useLoaderData();
+  const { shop, orders, restock, summary, ordersError, loadedAt, syncStats } = useLoaderData();
+  const revalidator = useRevalidator();
+  const isRefreshing = revalidator.state !== "idle";
   const [activeTab, setActiveTab] = useState("backorders");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
@@ -2003,7 +2111,55 @@ export default function AppIndex() {
           </p>
         </div>
 
-        <div style={summaryGridStyle}>
+
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "12px",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "18px",
+            padding: "12px 14px",
+            borderRadius: "12px",
+            border: "1px solid #dbe3ef",
+            background: "#ffffff",
+            boxShadow: "0 3px 10px rgba(15, 23, 42, 0.03)",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontSize: "13px", fontWeight: 700, color: "#0f172a" }}>
+              Data sync
+            </div>
+            <div style={{ fontSize: "13px", color: "#475569" }}>
+              Last loaded {loadedAt ? new Date(loadedAt).toLocaleString() : "just now"}
+              {syncStats?.ordersFetched ? ` • ${syncStats.ordersFetched} open orders scanned` : ""}
+              {syncStats?.inventoryItemsFetched ? ` • ${syncStats.inventoryItemsFetched} inventory items checked` : ""}
+              {syncStats?.truncated ? " • Reached pagination safety limit" : ""}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => revalidator.revalidate()}
+            disabled={isRefreshing}
+            style={{
+              border: "1px solid #cbd5e1",
+              background: isRefreshing ? "#f8fafc" : "#ffffff",
+              color: "#0f172a",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              fontSize: "13px",
+              fontWeight: 700,
+              cursor: isRefreshing ? "wait" : "pointer",
+              boxShadow: "0 2px 6px rgba(15, 23, 42, 0.04)",
+            }}
+          >
+            {isRefreshing ? "Refreshing…" : "Refresh data"}
+          </button>
+        </div>
+
+<div style={summaryGridStyle}>
           <div style={summaryCardStyle}>
             <div style={summaryLabelStyle}>Open backorder orders</div>
             <div style={summaryValueStyle}>{summary.openBackorderOrders}</div>
