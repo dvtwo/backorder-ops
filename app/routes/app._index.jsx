@@ -1380,6 +1380,7 @@ export default function AppIndex() {
     fontSize: "12px",
     fontWeight: 600,
     color: "#475467",
+    whiteSpace: "nowrap",
   };
 
   const selectStyle = {
@@ -1395,8 +1396,10 @@ export default function AppIndex() {
   };
 
   const filterGroupStyle = {
-    display: "grid",
-    gap: "4px",
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "nowrap",
   };
 
   const locationPopoverStyle = {
@@ -1467,6 +1470,7 @@ export default function AppIndex() {
     fontSize: "12px",
     color: "#667085",
     fontWeight: 500,
+    whiteSpace: "nowrap",
   };
 
   const tableWrapStyle = {
@@ -2105,6 +2109,13 @@ export default function AppIndex() {
     setAnalyticsDrilldown({ type: null, label: null });
   };
 
+  const closeLocationMenus = () => {
+    if (typeof document === "undefined") return;
+    document
+      .querySelectorAll('[data-location-popover="true"]')
+      .forEach((element) => element.removeAttribute("open"));
+  };
+
   const handleLocationToggle = (locationId) => {
     setAnalyticsDrilldown({ type: null, label: null });
     setSelectedLocationIds((current) => {
@@ -2128,11 +2139,13 @@ export default function AppIndex() {
       }
       return next;
     });
+    closeLocationMenus();
   };
 
   const handleAllLocationsToggle = () => {
     setAnalyticsDrilldown({ type: null, label: null });
     setSelectedLocationIds([]);
+    closeLocationMenus();
   };
 
   const handleAnalyticsVendorClick = (item) => {
@@ -2517,7 +2530,7 @@ export default function AppIndex() {
 
               <div style={filterGroupStyle}>
                 <span style={labelStyle}>Inventory locations</span>
-                <details style={locationPopoverStyle}>
+                <details data-location-popover="true" style={locationPopoverStyle}>
                   <summary style={locationButtonStyle}>
                     {selectedLocationSummary}
                   </summary>
@@ -2671,7 +2684,7 @@ export default function AppIndex() {
 
               <div style={filterGroupStyle}>
                 <span style={labelStyle}>Inventory locations</span>
-                <details style={locationPopoverStyle}>
+                <details data-location-popover="true" style={locationPopoverStyle}>
                   <summary style={locationButtonStyle}>
                     {selectedLocationSummary}
                   </summary>
@@ -2814,7 +2827,7 @@ export default function AppIndex() {
 
               <div style={filterGroupStyle}>
                 <span style={labelStyle}>Inventory locations</span>
-                <details style={locationPopoverStyle}>
+                <details data-location-popover="true" style={locationPopoverStyle}>
                   <summary style={locationButtonStyle}>
                     {selectedLocationSummary}
                   </summary>
