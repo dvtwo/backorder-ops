@@ -200,7 +200,7 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
                       id
                       name
                     }
-                    quantities(names: ["available"]) {
+                    quantities(names: ["available", "incoming"]) {
                       name
                       quantity
                     }
@@ -227,12 +227,23 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
           ),
           0,
         ),
+        incoming: Math.max(
+          Number(
+            level?.quantities?.find((quantity) => quantity?.name === "incoming")
+              ?.quantity || 0,
+          ),
+          0,
+        ),
       }));
 
       inventoryByItemId[inventoryItem.id] = {
         locationInventory,
         inventory: locationInventory.reduce(
           (sum, level) => sum + Number(level.quantity || 0),
+          0,
+        ),
+        incomingInventory: locationInventory.reduce(
+          (sum, level) => sum + Number(level.incoming || 0),
           0,
         ),
       };
@@ -274,6 +285,7 @@ export const loader = async ({ request }) => {
         const inventoryItemId = item.variant?.inventoryItem?.id || null;
         const inventoryRecord = inventoryByItemId[inventoryItemId] || {
           inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
+          incomingInventory: 0,
           locationInventory: [],
         };
 
@@ -288,6 +300,11 @@ export const loader = async ({ request }) => {
             totalUnfulfilled: 0,
             shortage: 0,
             affectedOrders: [],
+            incomingInventory: Number(inventoryRecord.incomingInventory || 0),
+            hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
+            purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
+              ? `https://${session.shop}/admin/purchase_orders`
+              : "",
             locationInventory: inventoryRecord.locationInventory,
           };
         }
@@ -321,6 +338,7 @@ export const loader = async ({ request }) => {
             const inventoryItemId = item.variant?.inventoryItem?.id || null;
             const inventoryRecord = inventoryByItemId[inventoryItemId] || {
               inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
+              incomingInventory: 0,
               locationInventory: [],
             };
 
@@ -335,6 +353,11 @@ export const loader = async ({ request }) => {
               variantId: item.variant?.id || null,
               inventoryItemId,
               inventory: Number(inventoryRecord.inventory || 0),
+              incomingInventory: Number(inventoryRecord.incomingInventory || 0),
+              hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
+              purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
+                ? `https://${session.shop}/admin/purchase_orders`
+                : "",
               locationInventory: inventoryRecord.locationInventory || [],
             };
           });
@@ -820,14 +843,27 @@ export default function AppIndex() {
           )
           .reduce((sum, location) => sum + Number(location.quantity || 0), 0);
 
+        const selectedIncomingInventory = (item.locationInventory || [])
+          .filter(
+            (location) =>
+              allLocationsSelected ||
+              normalizedSelectedLocationIds.includes(location.id),
+          )
+          .reduce((sum, location) => sum + Number(location.incoming || 0), 0);
+
         return {
           ...item,
           inventory: selectedInventory,
+          incomingInventory: selectedIncomingInventory,
+          hasIncomingInventory: selectedIncomingInventory > 0,
+          purchaseOrderUrl: selectedIncomingInventory > 0
+            ? `https://${shop}/admin/purchase_orders`
+            : "",
           shortage: Math.max(Number(item.totalUnfulfilled || 0) - selectedInventory, 0),
         };
       })
       .filter((item) => Number(item.shortage || 0) > 0);
-  }, [allLocationsSelected, normalizedSelectedLocationIds, restock]);
+  }, [allLocationsSelected, normalizedSelectedLocationIds, restock, shop]);
 
   const filteredRestock = useMemo(() => {
     if (selectedVendor === "all") return locationFilteredRestock;
@@ -2117,6 +2153,11 @@ export default function AppIndex() {
     return `https://${shop}/admin/orders/${adminOrderId}`;
   };
 
+  const getPurchaseOrdersAdminUrl = () => {
+    if (!shop) return "#";
+    return `https://${shop}/admin/purchase_orders`;
+  };
+
   const openSkuDrawer = (key) => {
     setSelectedSkuKey(String(key || ""));
   };
@@ -2781,6 +2822,8 @@ export default function AppIndex() {
                             <th style={headerCell}>Product</th>
                             <th style={headerCell}>Total Unfulfilled</th>
                             <th style={headerCell}>Selected Inventory</th>
+                            <th style={headerCell}>On open PO</th>
+                            <th style={headerCell}>Qty on order</th>
                             <th style={headerCell}>Total Shortage</th>
                           </tr>
                         </thead>
@@ -2805,6 +2848,36 @@ export default function AppIndex() {
                                 </td>
                                 <td style={bodyCell}>
                                   <span style={countTextStyle}>{item.inventory}</span>
+                                </td>
+                                <td style={bodyCell}>
+                                  {item.hasIncomingInventory ? (
+                                    <a
+                                      href={item.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
+                                      target="_top"
+                                      rel="noreferrer"
+                                      style={orderLinkStyle}
+                                      title="Open Shopify Purchase Orders"
+                                    >
+                                      Yes
+                                    </a>
+                                  ) : (
+                                    <span style={mutedTextStyle}>No</span>
+                                  )}
+                                </td>
+                                <td style={bodyCell}>
+                                  {item.hasIncomingInventory ? (
+                                    <a
+                                      href={item.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
+                                      target="_top"
+                                      rel="noreferrer"
+                                      style={orderLinkStyle}
+                                      title="Open Shopify Purchase Orders"
+                                    >
+                                      {item.incomingInventory}
+                                    </a>
+                                  ) : (
+                                    <span style={mutedTextStyle}>0</span>
+                                  )}
                                 </td>
                                 <td style={bodyCell}>
                                   <span style={shortageBadgeStyle}>{item.shortage}</span>
@@ -3139,6 +3212,10 @@ export default function AppIndex() {
                   <div style={drawerMetaValueStyle}>{selectedSkuItem.totalUnfulfilled}</div>
                 </div>
                 <div style={drawerMetaCardStyle}>
+                  <div style={drawerMetaLabelStyle}>On order</div>
+                  <div style={drawerMetaValueStyle}>{selectedSkuItem.incomingInventory || 0}</div>
+                </div>
+                <div style={drawerMetaCardStyle}>
                   <div style={drawerMetaLabelStyle}>Shortage</div>
                   <div style={drawerMetaValueStyle}>{selectedSkuItem.shortage}</div>
                 </div>
@@ -3187,6 +3264,16 @@ export default function AppIndex() {
                         Open first order
                       </a>
                     ) : null}
+                    {selectedSkuItem.hasIncomingInventory ? (
+                      <a
+                        href={selectedSkuItem.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
+                        target="_top"
+                        rel="noreferrer"
+                        style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                      >
+                        Open purchase orders
+                      </a>
+                    ) : null}
                   </div>
                   {copiedAction ? <div style={locationHintStyle}>{copiedAction}</div> : null}
                 </div>
@@ -3215,6 +3302,7 @@ export default function AppIndex() {
                               <div style={{ fontSize: "13px", fontWeight: 700, color: "#17212b" }}>{location.name}</div>
                               <div style={{ fontSize: "12px", color: "#667085" }}>
                                 Available: {location.quantity}
+                                {Number(location.incoming || 0) > 0 ? ` • On order: ${location.incoming}` : ""}
                               </div>
                             </div>
                             <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
