@@ -1311,24 +1311,30 @@ export default function AppIndex() {
   };
 
   const tabsRowStyle = {
-    display: "flex",
-    gap: "8px",
+    display: "inline-flex",
+    gap: "6px",
     alignItems: "center",
     flexWrap: "wrap",
+    padding: "6px",
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    background: "#ffffff",
+    boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+    marginBottom: "2px",
   };
 
   const getTabStyle = (isActive) => ({
     appearance: "none",
-    border: isActive ? "1px solid #3b82f6" : "1px solid #cfd8e6",
-    background: isActive ? "#eaf2ff" : "#ffffff",
-    color: isActive ? "#1d4ed8" : "#1f2937",
+    border: isActive ? "1px solid #c8d7eb" : "1px solid transparent",
+    background: isActive ? "#f3f7fc" : "transparent",
+    color: isActive ? "#0f172a" : "#5b677a",
     padding: "8px 14px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "13px",
-    fontWeight: 600,
-    boxShadow: isActive ? "0 3px 10px rgba(59, 130, 246, 0.08)" : "none",
+    fontWeight: isActive ? 700 : 600,
+    boxShadow: isActive ? "0 1px 3px rgba(15, 23, 42, 0.06)" : "none",
     transition: "all 0.15s ease",
   });
 
@@ -1369,11 +1375,19 @@ export default function AppIndex() {
   const toolbarStyle = {
     display: "flex",
     alignItems: "center",
-    gap: "10px",
+    justifyContent: "space-between",
+    gap: "14px",
     flexWrap: "wrap",
-    padding: "12px 18px",
+    padding: "14px 18px",
     borderBottom: "1px solid #e7edf5",
     background: "#fcfdff",
+  };
+
+  const toolbarControlsStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    flexWrap: "wrap",
   };
 
   const labelStyle = {
@@ -1385,14 +1399,16 @@ export default function AppIndex() {
 
   const selectStyle = {
     fontFamily: fontStack,
-    fontSize: "12px",
+    fontSize: "13px",
     color: "#17212b",
-    padding: "8px 12px",
+    padding: "0 12px",
+    height: "38px",
     borderRadius: "10px",
     border: "1px solid #cfd8e6",
     background: "#ffffff",
     minWidth: "220px",
     outline: "none",
+    boxSizing: "border-box",
   };
 
   const filterGroupStyle = {
@@ -1411,14 +1427,19 @@ export default function AppIndex() {
     border: "1px solid #cfd8e6",
     background: "#ffffff",
     color: "#17212b",
-    padding: "8px 12px",
+    padding: "0 12px",
+    height: "38px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
-    fontSize: "12px",
+    fontSize: "13px",
     fontWeight: 500,
     minWidth: "220px",
     textAlign: "left",
+    display: "flex",
+    alignItems: "center",
+    boxSizing: "border-box",
+    listStyle: "none",
   };
 
   const locationMenuStyle = {
@@ -1469,7 +1490,7 @@ export default function AppIndex() {
   const resultCountStyle = {
     fontSize: "12px",
     color: "#667085",
-    fontWeight: 500,
+    fontWeight: 600,
     whiteSpace: "nowrap",
   };
 
@@ -2512,52 +2533,55 @@ export default function AppIndex() {
             </div>
 
             <div style={toolbarStyle}>
-              <div style={filterGroupStyle}>
-                <label htmlFor="fulfillment-status-filter" style={labelStyle}>
-                  Filter by stock status
-                </label>
-                <select
-                  id="fulfillment-status-filter"
-                  value={shipStatusFilter}
-                  onChange={(event) => setShipStatusFilter(event.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="all">All eligible orders</option>
-                  <option value="ready_to_ship">Ready to ship</option>
-                  <option value="partially_in_stock">Partially in stock</option>
-                </select>
-              </div>
+              <div style={toolbarControlsStyle}>
+                <div style={filterGroupStyle}>
+                  <label htmlFor="fulfillment-status-filter" style={labelStyle}>
+                    Filter by stock status
+                  </label>
+                  <select
+                    id="fulfillment-status-filter"
+                    value={shipStatusFilter}
+                    onChange={(event) => setShipStatusFilter(event.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="all">All eligible orders</option>
+                    <option value="ready_to_ship">Ready to ship</option>
+                    <option value="partially_in_stock">Partially in stock</option>
+                  </select>
+                </div>
 
-              <div style={filterGroupStyle}>
-                <span style={labelStyle}>Inventory locations</span>
-                <details data-location-popover="true" style={locationPopoverStyle}>
-                  <summary style={locationButtonStyle}>
-                    {selectedLocationSummary}
-                  </summary>
-                  <div style={locationMenuStyle}>
-                    <label style={locationOptionRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={allLocationsSelected}
-                        onChange={handleAllLocationsToggle}
-                      />
-                      <span>All locations</span>
-                    </label>
-                    <div style={locationHintStyle}>
-                      Choose one or more locations to recalculate which orders can ship now.
-                    </div>
-                    {locationOptions.map((location) => (
-                      <label key={location.id} style={locationOptionRowStyle}>
+                <div style={filterGroupStyle}>
+                  <span style={labelStyle}>Inventory locations</span>
+                  <details data-location-popover="true" style={locationPopoverStyle}>
+                    <summary style={locationButtonStyle}>
+                      <span style={{ marginRight: "8px", fontSize: "11px" }}>▼</span>
+                      {selectedLocationSummary}
+                    </summary>
+                    <div style={locationMenuStyle}>
+                      <label style={locationOptionRowStyle}>
                         <input
                           type="checkbox"
-                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
-                          onChange={() => handleLocationToggle(location.id)}
+                          checked={allLocationsSelected}
+                          onChange={handleAllLocationsToggle}
                         />
-                        <span>{location.name}</span>
+                        <span>All locations</span>
                       </label>
-                    ))}
-                  </div>
-                </details>
+                      <div style={locationHintStyle}>
+                        Choose one or more locations to recalculate which orders can ship now.
+                      </div>
+                      {locationOptions.map((location) => (
+                        <label key={location.id} style={locationOptionRowStyle}>
+                          <input
+                            type="checkbox"
+                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                            onChange={() => handleLocationToggle(location.id)}
+                          />
+                          <span>{location.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
               </div>
 
               <div style={resultCountStyle}>
