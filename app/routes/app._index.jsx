@@ -310,6 +310,47 @@ export const loader = async ({ request }) => {
       );
     });
 
+
+    const openOrdersDetailed = rawOrders
+      .map((node) => {
+        const adminOrderId = node.id?.split("/").pop() || "";
+        const unfulfilledLineItems = (node.lineItems || [])
+          .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
+          .map((item) => {
+            const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
+            const inventoryItemId = item.variant?.inventoryItem?.id || null;
+            const inventoryRecord = inventoryByItemId[inventoryItemId] || {
+              inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
+              locationInventory: [],
+            };
+
+            return {
+              id: item.id,
+              key,
+              sku: item.sku || "—",
+              product: item.title,
+              vendor: item.vendor || "—",
+              quantity: Number(item.quantity || 0),
+              unfulfilled: Number(item.unfulfilledQuantity || 0),
+              variantId: item.variant?.id || null,
+              inventoryItemId,
+              inventory: Number(inventoryRecord.inventory || 0),
+              locationInventory: inventoryRecord.locationInventory || [],
+            };
+          });
+
+        return {
+          id: node.id,
+          adminOrderId,
+          name: node.name,
+          date: node.createdAt,
+          status: node.displayFulfillmentStatus,
+          items: (node.lineItems || []).length,
+          unfulfilledLineItems,
+        };
+      })
+      .filter((order) => (order.unfulfilledLineItems || []).length > 0);
+
     const orders = rawOrders
       .map((node) => {
         const lineItems = node.lineItems || [];
@@ -367,6 +408,7 @@ export const loader = async ({ request }) => {
     return {
       shop: session.shop,
       orders,
+      openOrdersDetailed,
       restock,
       summary,
       ordersError: "",
@@ -381,6 +423,7 @@ export const loader = async ({ request }) => {
     return {
       shop: "",
       orders: [],
+      openOrdersDetailed: [],
       restock: [],
       summary: emptySummary,
       ordersError: error instanceof Error ? error.message : "Failed to load data",
@@ -706,10 +749,11 @@ function TrendChart({ title, subtitle, data, emptyText, onPointClick, activeLabe
 }
 
 export default function AppIndex() {
-  const { shop, orders, restock, summary, ordersError, loadedAt, syncStats } = useLoaderData();
+  const { shop, orders, openOrdersDetailed, restock, summary, ordersError, loadedAt, syncStats } = useLoaderData();
   const revalidator = useRevalidator();
   const isRefreshing = revalidator.state !== "idle";
   const [activeTab, setActiveTab] = useState("backorders");
+  const [shipStatusFilter, setShipStatusFilter] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [selectedSkuKey, setSelectedSkuKey] = useState(null);
@@ -821,6 +865,112 @@ export default function AppIndex() {
       })
       .filter((order) => order.unfulfilledItems > 0);
   }, [filteredRestockKeys, orders]);
+
+
+  const fulfillmentOrders = useMemo(() => {
+    const inventoryPools = {};
+
+    openOrdersDetailed.forEach((order) => {
+      (order.unfulfilledLineItems || []).forEach((item) => {
+        if (inventoryPools[item.key] !== undefined) return;
+
+        const selectedInventory = (item.locationInventory || [])
+          .filter(
+            (location) =>
+              allLocationsSelected ||
+              normalizedSelectedLocationIds.includes(location.id),
+          )
+          .reduce((sum, location) => sum + Number(location.quantity || 0), 0);
+
+        inventoryPools[item.key] = selectedInventory;
+      });
+    });
+
+    return openOrdersDetailed
+      .slice()
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .map((order) => {
+        let fullyAllocatedLines = 0;
+        let partiallyAllocatedLines = 0;
+        let allocatedUnits = 0;
+        let totalUnfulfilledUnits = 0;
+
+        const lineItems = (order.unfulfilledLineItems || []).map((item) => {
+          const availableBefore = Number(inventoryPools[item.key] || 0);
+          const allocated = Math.min(Number(item.unfulfilled || 0), availableBefore);
+          const availableAfter = Math.max(availableBefore - allocated, 0);
+          inventoryPools[item.key] = availableAfter;
+
+          totalUnfulfilledUnits += Number(item.unfulfilled || 0);
+          allocatedUnits += allocated;
+
+          if (allocated >= Number(item.unfulfilled || 0) && Number(item.unfulfilled || 0) > 0) {
+            fullyAllocatedLines += 1;
+          } else if (allocated > 0) {
+            partiallyAllocatedLines += 1;
+          }
+
+          return {
+            ...item,
+            selectedInventory: availableBefore,
+            allocated,
+            remainingShort: Math.max(Number(item.unfulfilled || 0) - allocated, 0),
+            fulfillmentState:
+              allocated >= Number(item.unfulfilled || 0) && Number(item.unfulfilled || 0) > 0
+                ? "ready_to_ship"
+                : allocated > 0
+                  ? "partially_in_stock"
+                  : "waiting_for_stock",
+          };
+        });
+
+        let fulfillmentState = "waiting_for_stock";
+        if (lineItems.length > 0 && fullyAllocatedLines === lineItems.length) {
+          fulfillmentState = "ready_to_ship";
+        } else if (allocatedUnits > 0 || partiallyAllocatedLines > 0 || fullyAllocatedLines > 0) {
+          fulfillmentState = "partially_in_stock";
+        }
+
+        return {
+          ...order,
+          lineItems,
+          fulfillmentState,
+          allocatedUnits,
+          totalUnfulfilledUnits,
+          readyLineCount: fullyAllocatedLines,
+          partiallyAllocatedLines,
+        };
+      })
+      .filter((order) => order.fulfillmentState !== "waiting_for_stock");
+  }, [
+    allLocationsSelected,
+    normalizedSelectedLocationIds,
+    openOrdersDetailed,
+  ]);
+
+  const filteredFulfillmentOrders = useMemo(() => {
+    if (shipStatusFilter === "all") return fulfillmentOrders;
+    return fulfillmentOrders.filter((order) => order.fulfillmentState === shipStatusFilter);
+  }, [fulfillmentOrders, shipStatusFilter]);
+
+  const fulfillmentSummary = useMemo(() => {
+    const readyToShip = fulfillmentOrders.filter(
+      (order) => order.fulfillmentState === "ready_to_ship",
+    ).length;
+    const partiallyInStock = fulfillmentOrders.filter(
+      (order) => order.fulfillmentState === "partially_in_stock",
+    ).length;
+
+    return {
+      eligibleOrders: fulfillmentOrders.length,
+      readyToShip,
+      partiallyInStock,
+      allocatedUnits: fulfillmentOrders.reduce(
+        (sum, order) => sum + Number(order.allocatedUnits || 0),
+        0,
+      ),
+    };
+  }, [fulfillmentOrders]);
 
   const statusLabel = (status) => {
     if (!status) return "Unknown";
@@ -1395,6 +1545,43 @@ export default function AppIndex() {
     fontSize: "11px",
   };
 
+
+  const fulfillmentBadgeStyles = {
+    ready_to_ship: {
+      display: "inline-block",
+      padding: "4px 8px",
+      borderRadius: "999px",
+      fontSize: "11px",
+      fontWeight: 700,
+      background: "#ecfdf3",
+      color: "#067647",
+      border: "1px solid #abefc6",
+      whiteSpace: "nowrap",
+    },
+    partially_in_stock: {
+      display: "inline-block",
+      padding: "4px 8px",
+      borderRadius: "999px",
+      fontSize: "11px",
+      fontWeight: 700,
+      background: "#fff4df",
+      color: "#9a6700",
+      border: "1px solid #f1cf8c",
+      whiteSpace: "nowrap",
+    },
+    waiting_for_stock: {
+      display: "inline-block",
+      padding: "4px 8px",
+      borderRadius: "999px",
+      fontSize: "11px",
+      fontWeight: 700,
+      background: "#f2f4f7",
+      color: "#667085",
+      border: "1px solid #d0d5dd",
+      whiteSpace: "nowrap",
+    },
+  };
+
   const emptyStateStyle = {
     padding: "16px 18px 18px 18px",
     color: "#5b677a",
@@ -1894,6 +2081,12 @@ export default function AppIndex() {
       .replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
+  const formatFulfillmentState = (state) => {
+    if (state === "ready_to_ship") return "Ready to ship";
+    if (state === "partially_in_stock") return "Partially in stock";
+    return "Waiting for stock";
+  };
+
   const getOrderAdminUrl = (adminOrderId) => {
     if (!shop || !adminOrderId) return "#";
     return `https://${shop}/admin/orders/${adminOrderId}`;
@@ -2196,6 +2389,14 @@ export default function AppIndex() {
 
           <button
             type="button"
+            onClick={() => setActiveTab("fulfillment")}
+            style={getTabStyle(activeTab === "fulfillment")}
+          >
+            Fulfillment
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab("restock")}
             style={getTabStyle(activeTab === "restock")}
           >
@@ -2280,6 +2481,155 @@ export default function AppIndex() {
                         </td>
                         <td style={bodyCell}>
                           <span style={badgeStyle}>{formatStatus(o.status)}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : activeTab === "fulfillment" ? (
+          <div style={cardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>Orders ready to ship</h2>
+              <p style={sectionTextStyle}>
+                Open orders re-evaluated against current available inventory. Orders are allocated oldest first so this view reflects which orders can ship now and which are only partially covered.
+              </p>
+            </div>
+
+            <div style={toolbarStyle}>
+              <div style={filterGroupStyle}>
+                <label htmlFor="fulfillment-status-filter" style={labelStyle}>
+                  Filter by stock status
+                </label>
+                <select
+                  id="fulfillment-status-filter"
+                  value={shipStatusFilter}
+                  onChange={(event) => setShipStatusFilter(event.target.value)}
+                  style={selectStyle}
+                >
+                  <option value="all">All eligible orders</option>
+                  <option value="ready_to_ship">Ready to ship</option>
+                  <option value="partially_in_stock">Partially in stock</option>
+                </select>
+              </div>
+
+              <div style={filterGroupStyle}>
+                <span style={labelStyle}>Inventory locations</span>
+                <details style={locationPopoverStyle}>
+                  <summary style={locationButtonStyle}>
+                    {selectedLocationSummary}
+                  </summary>
+                  <div style={locationMenuStyle}>
+                    <label style={locationOptionRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={allLocationsSelected}
+                        onChange={handleAllLocationsToggle}
+                      />
+                      <span>All locations</span>
+                    </label>
+                    <div style={locationHintStyle}>
+                      Choose one or more locations to recalculate which orders can ship now.
+                    </div>
+                    {locationOptions.map((location) => (
+                      <label key={location.id} style={locationOptionRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                          onChange={() => handleLocationToggle(location.id)}
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              </div>
+
+              <div style={resultCountStyle}>
+                {filteredFulfillmentOrders.length} order
+                {filteredFulfillmentOrders.length === 1 ? "" : "s"}
+                {" · "}
+                {fulfillmentSummary.readyToShip} ready to ship
+                {" · "}
+                {fulfillmentSummary.partiallyInStock} partially in stock
+                {" · "}
+                {fulfillmentSummary.allocatedUnits} unit
+                {fulfillmentSummary.allocatedUnits === 1 ? "" : "s"} allocatable
+              </div>
+            </div>
+
+            {ordersError ? (
+              <div style={errorStateStyle}>{ordersError}</div>
+            ) : filteredFulfillmentOrders.length === 0 ? (
+              <div style={emptyStateStyle}>
+                No open orders currently match this stock status filter.
+              </div>
+            ) : (
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={headerCell}>Order</th>
+                      <th style={headerCell}>Date</th>
+                      <th style={headerCell}>Allocatable</th>
+                      <th style={headerCell}>Line coverage</th>
+                      <th style={headerCell}>SKU coverage</th>
+                      <th style={headerCell}>Ship status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredFulfillmentOrders.map((order) => (
+                      <tr key={`ship-${order.id}`}>
+                        <td style={bodyCell}>
+                          <a
+                            href={getOrderAdminUrl(order.adminOrderId)}
+                            target="_top"
+                            rel="noreferrer"
+                            style={orderLinkStyle}
+                          >
+                            {order.name}
+                          </a>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={mutedTextStyle}>
+                            {new Date(order.date).toLocaleDateString()}
+                          </span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>
+                            {order.allocatedUnits} / {order.totalUnfulfilledUnits} units
+                          </span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>
+                            {order.readyLineCount} / {order.lineItems.length} line
+                            {order.lineItems.length === 1 ? "" : "s"} fully covered
+                          </span>
+                        </td>
+                        <td style={bodyCell}>
+                          <div style={lineItemsListStyle}>
+                            {order.lineItems.map((item) => (
+                              <div key={item.id} style={lineItemRowStyle}>
+                                <div style={lineItemTextStyle}>
+                                  <span style={skuLabelStyle}>SKU: </span>
+                                  <span style={skuValueStyle}>{item.sku}</span>
+                                  {"  |  "}
+                                  <span style={vendorInlineStyle}>{item.vendor}</span>
+                                </div>
+                                <div style={{ ...lineItemTextStyle, marginTop: "4px" }}>
+                                  {item.allocated} / {item.unfulfilled} allocatable
+                                  {item.remainingShort > 0 ? ` • ${item.remainingShort} still short` : " • fully covered"}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={fulfillmentBadgeStyles[order.fulfillmentState]}>
+                            {formatFulfillmentState(order.fulfillmentState)}
+                          </span>
                         </td>
                       </tr>
                     ))}
