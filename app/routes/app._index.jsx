@@ -27,6 +27,7 @@ const ORDERS_PAGE_SIZE = 100;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const INVENTORY_BATCH_SIZE = 40;
 const MAX_ORDER_PAGES = 25;
+const INVENTORY_LEVELS_PAGE_SIZE = 100;
 
 const emptySummary = {
   openBackorderOrders: 0,
@@ -198,6 +199,40 @@ async function fetchAllOpenOrders(admin) {
 async function fetchInventoryByItemId(admin, inventoryItemIds) {
   const inventoryByItemId = {};
 
+  const toLocationInventory = (edges = []) =>
+    edges.map(({ node: level }) => ({
+      id: level?.location?.id || "",
+      name: level?.location?.name || "Unknown location",
+      quantity: Math.max(
+        Number(
+          level?.quantities?.find((quantity) => quantity?.name === "available")
+            ?.quantity || 0,
+        ),
+        0,
+      ),
+      incoming: Math.max(
+        Number(
+          level?.quantities?.find((quantity) => quantity?.name === "incoming")
+            ?.quantity || 0,
+        ),
+        0,
+      ),
+    }));
+
+  const setInventoryRecord = (inventoryItemId, locationInventory) => {
+    inventoryByItemId[inventoryItemId] = {
+      locationInventory,
+      inventory: locationInventory.reduce(
+        (sum, level) => sum + Number(level.quantity || 0),
+        0,
+      ),
+      incomingInventory: locationInventory.reduce(
+        (sum, level) => sum + Number(level.incoming || 0),
+        0,
+      ),
+    };
+  };
+
   for (const ids of chunkArray(inventoryItemIds, INVENTORY_BATCH_SIZE)) {
     const data = await graphqlJson(
       admin,
@@ -206,7 +241,11 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
           nodes(ids: $ids) {
             ... on InventoryItem {
               id
-              inventoryLevels(first: 100) {
+              inventoryLevels(first: ${INVENTORY_LEVELS_PAGE_SIZE}) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 edges {
                   node {
                     location {
@@ -227,40 +266,52 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
       { ids },
     );
 
-    (data?.nodes || []).forEach((inventoryItem) => {
-      if (!inventoryItem?.id) return;
+    for (const inventoryItem of data?.nodes || []) {
+      if (!inventoryItem?.id) continue;
 
-      const locationInventory = (inventoryItem?.inventoryLevels?.edges || []).map(({ node: level }) => ({
-        id: level?.location?.id || "",
-        name: level?.location?.name || "Unknown location",
-        quantity: Math.max(
-          Number(
-            level?.quantities?.find((quantity) => quantity?.name === "available")
-              ?.quantity || 0,
-          ),
-          0,
-        ),
-        incoming: Math.max(
-          Number(
-            level?.quantities?.find((quantity) => quantity?.name === "incoming")
-              ?.quantity || 0,
-          ),
-          0,
-        ),
-      }));
+      const inventoryLevelEdges = [...(inventoryItem?.inventoryLevels?.edges || [])];
+      let hasNextPage = Boolean(inventoryItem?.inventoryLevels?.pageInfo?.hasNextPage);
+      let after = inventoryItem?.inventoryLevels?.pageInfo?.endCursor || null;
 
-      inventoryByItemId[inventoryItem.id] = {
-        locationInventory,
-        inventory: locationInventory.reduce(
-          (sum, level) => sum + Number(level.quantity || 0),
-          0,
-        ),
-        incomingInventory: locationInventory.reduce(
-          (sum, level) => sum + Number(level.incoming || 0),
-          0,
-        ),
-      };
-    });
+      while (hasNextPage) {
+        const nextPage = await graphqlJson(
+          admin,
+          `#graphql
+            query InventoryItemLocationPage($id: ID!, $first: Int!, $after: String) {
+              inventoryItem(id: $id) {
+                id
+                inventoryLevels(first: $first, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  edges {
+                    node {
+                      location {
+                        id
+                        name
+                      }
+                      quantities(names: ["available", "incoming"]) {
+                        name
+                        quantity
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `,
+          { id: inventoryItem.id, first: INVENTORY_LEVELS_PAGE_SIZE, after },
+        );
+
+        const connection = nextPage?.inventoryItem?.inventoryLevels;
+        inventoryLevelEdges.push(...(connection?.edges || []));
+        hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+        after = connection?.pageInfo?.endCursor || null;
+      }
+
+      setInventoryRecord(inventoryItem.id, toLocationInventory(inventoryLevelEdges));
+    }
   }
 
   return inventoryByItemId;
@@ -272,6 +323,22 @@ export const loader = async ({ request }) => {
     const loadedAt = new Date().toISOString();
 
     const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
+
+    if (stats.truncated) {
+      return {
+        shop: session.shop,
+        orders: [],
+        openOrdersDetailed: [],
+        restock: [],
+        summary: emptySummary,
+        ordersError: `Backorder data is incomplete because more than ${MAX_ORDER_PAGES * ORDERS_PAGE_SIZE} open orders matched the scan. Narrow the order query or move this to a background sync before using these totals.`,
+        loadedAt,
+        syncStats: {
+          ...emptySyncStats,
+          ...stats,
+        },
+      };
+    }
 
     const inventoryItemIds = Array.from(
       new Set(
@@ -394,12 +461,7 @@ export const loader = async ({ request }) => {
         const backorderedLineItems = lineItems
           .filter((item) => {
             const unfulfilled = Number(item.unfulfilledQuantity || 0);
-            if (unfulfilled <= 0) return false;
-
-            const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
-            const aggregate = skuMap[key];
-
-            return aggregate && aggregate.shortage > 0;
+            return unfulfilled > 0;
           })
           .map((item) => ({
             id: item.id,
@@ -424,21 +486,29 @@ export const loader = async ({ request }) => {
       .filter((order) => order.unfulfilledItems > 0);
 
     const restock = Object.values(skuMap)
-      .filter((item) => item.shortage > 0)
       .sort((a, b) => {
         const vendorCompare = (a.vendor || "—").localeCompare(b.vendor || "—");
         if (vendorCompare !== 0) return vendorCompare;
         return b.shortage - a.shortage;
       });
 
+    const allLocationShortages = restock.filter((item) => item.shortage > 0);
+    const allLocationShortageKeys = new Set(
+      allLocationShortages.map((item) => String(item.key || "")),
+    );
+
     const summary = {
-      openBackorderOrders: orders.length,
-      totalAffectedSkus: restock.length,
-      totalShortageUnits: restock.reduce(
+      openBackorderOrders: orders.filter((order) =>
+        (order.backorderedLineItems || []).some((item) =>
+          allLocationShortageKeys.has(String(item.key || "")),
+        ),
+      ).length,
+      totalAffectedSkus: allLocationShortages.length,
+      totalShortageUnits: allLocationShortages.reduce(
         (sum, item) => sum + Number(item.shortage || 0),
         0,
       ),
-      vendorsAffected: new Set(restock.map((item) => item.vendor || "—")).size,
+      vendorsAffected: new Set(allLocationShortages.map((item) => item.vendor || "—")).size,
     };
 
     return {
@@ -1435,53 +1505,6 @@ export default function AppIndex() {
     textAlign: "left",
   };
 
-  const expandedRowCellStyle = {
-    padding: "0 12px 12px 12px",
-    background: "#fbfdff",
-    borderBottom: "1px solid #eef2f7",
-  };
-
-  const drilldownCardStyle = {
-    border: "1px solid #e7edf5",
-    background: "#ffffff",
-    borderRadius: "10px",
-    overflow: "hidden",
-    marginTop: "-2px",
-  };
-
-  const drilldownHeaderStyle = {
-    padding: "10px 12px",
-    borderBottom: "1px solid #eef2f7",
-    background: "#f9fbff",
-    fontSize: "12px",
-    color: "#475467",
-    fontWeight: 600,
-  };
-
-  const drilldownTableStyle = {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontFamily: fontStack,
-  };
-
-  const drilldownHeaderCellStyle = {
-    textAlign: "left",
-    fontSize: "11px",
-    fontWeight: 600,
-    color: "#667085",
-    background: "#ffffff",
-    borderBottom: "1px solid #eef2f7",
-    padding: "8px 12px",
-  };
-
-  const drilldownBodyCellStyle = {
-    fontSize: "12px",
-    color: "#17212b",
-    borderBottom: "1px solid #f2f4f7",
-    padding: "8px 12px",
-    fontWeight: 400,
-  };
-
   const vendorGroupWrapStyle = {
     display: "grid",
     gap: "12px",
@@ -2257,7 +2280,7 @@ export default function AppIndex() {
 
             {ordersError ? (
               <div style={errorStateStyle}>{ordersError}</div>
-            ) : orders.length === 0 ? (
+            ) : filteredOrders.length === 0 ? (
               <div style={emptyStateStyle}>No backorders found.</div>
             ) : (
               <div style={tableWrapStyle}>
@@ -2273,7 +2296,7 @@ export default function AppIndex() {
                     </tr>
                   </thead>
                   <tbody>
-                    {orders.map((o) => (
+                    {filteredOrders.map((o) => (
                       <tr key={o.id}>
                         <td style={bodyCell}>
                           <a
