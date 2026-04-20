@@ -962,6 +962,18 @@ export default function AppIndex() {
     return () => window.clearTimeout(timeout);
   }, [copiedAction]);
 
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('[data-location-popover="true"]')) {
+        document
+          .querySelectorAll('[data-location-popover="true"]')
+          .forEach((el) => el.removeAttribute("open"));
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const fontStack =
     '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
