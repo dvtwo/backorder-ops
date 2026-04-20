@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useRevalidator } from "react-router";
+import { useLoaderData, useRevalidator, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
+import HorizontalBarChart from "../components/HorizontalBarChart";
+import TrendChart from "../components/TrendChart";
 
 const chunkArray = (items, size) => {
   const chunks = [];
@@ -8,6 +10,17 @@ const chunkArray = (items, size) => {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+};
+
+const formatDate = (dateStr) => {
+  const date = new Date(dateStr);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((todayStart - dateStart) / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
 const ORDERS_PAGE_SIZE = 100;
@@ -54,7 +67,7 @@ async function fetchAllOpenOrders(admin) {
     const data = await graphqlJson(
       admin,
       `#graphql
-        query BackorderOrdersPage($first: Int!, $after: String) {
+        query BackorderOrdersPage($first: Int!, $after: String, $lineItemsFirst: Int!) {
           orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true, query: "status:open") {
             pageInfo {
               hasNextPage
@@ -66,7 +79,7 @@ async function fetchAllOpenOrders(admin) {
                 name
                 createdAt
                 displayFulfillmentStatus
-                lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
+                lineItems(first: $lineItemsFirst) {
                   pageInfo {
                     hasNextPage
                     endCursor
@@ -94,7 +107,7 @@ async function fetchAllOpenOrders(admin) {
           }
         }
       `,
-      { first: ORDERS_PAGE_SIZE, after },
+      { first: ORDERS_PAGE_SIZE, after, lineItemsFirst: LINE_ITEMS_PAGE_SIZE },
     );
 
     const orderConnection = data?.orders;
@@ -283,11 +296,11 @@ export const loader = async ({ request }) => {
 
         const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
         const inventoryItemId = item.variant?.inventoryItem?.id || null;
-        const inventoryRecord = inventoryByItemId[inventoryItemId] || {
-          inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
-          incomingInventory: 0,
-          locationInventory: [],
-        };
+        const inventoryRecord = inventoryByItemId[inventoryItemId] || (
+          inventoryItemId === null
+            ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
+            : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
+        );
 
         if (!skuMap[key]) {
           skuMap[key] = {
@@ -336,11 +349,11 @@ export const loader = async ({ request }) => {
           .map((item) => {
             const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
             const inventoryItemId = item.variant?.inventoryItem?.id || null;
-            const inventoryRecord = inventoryByItemId[inventoryItemId] || {
-              inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0),
-              incomingInventory: 0,
-              locationInventory: [],
-            };
+            const inventoryRecord = inventoryByItemId[inventoryItemId] || (
+              inventoryItemId === null
+                ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
+                : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
+            );
 
             return {
               id: item.id,
@@ -455,321 +468,6 @@ export const loader = async ({ request }) => {
     };
   }
 };
-
-function HorizontalBarChart({
-  title,
-  subtitle,
-  data,
-  valueFormatter = (value) => String(value),
-  emptyText,
-  onItemClick,
-  activeLabel,
-}) {
-  const fontStack =
-    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-
-  const chartCardStyle = {
-    background: "#ffffff",
-    border: "1px solid #dbe3ef",
-    borderRadius: "14px",
-    overflow: "hidden",
-    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
-  };
-
-  const chartHeaderStyle = {
-    padding: "14px 16px 10px 16px",
-    borderBottom: "1px solid #e7edf5",
-    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
-  };
-
-  const chartTitleStyle = {
-    margin: 0,
-    fontSize: "14px",
-    lineHeight: 1.2,
-    fontWeight: 700,
-    color: "#0f172a",
-    fontFamily: fontStack,
-  };
-
-  const chartSubtitleStyle = {
-    marginTop: "4px",
-    marginBottom: 0,
-    fontSize: "12px",
-    lineHeight: 1.4,
-    color: "#667085",
-    fontFamily: fontStack,
-    fontWeight: 400,
-  };
-
-  const chartBodyStyle = {
-    padding: "14px 16px 16px 16px",
-    display: "grid",
-    gap: "10px",
-  };
-
-  const emptyStateStyle = {
-    color: "#5b677a",
-    fontSize: "12px",
-    fontFamily: fontStack,
-    fontWeight: 400,
-  };
-
-  const maxValue = Math.max(...data.map((item) => Number(item.value || 0)), 0);
-
-  return (
-    <div style={chartCardStyle}>
-      <div style={chartHeaderStyle}>
-        <h3 style={chartTitleStyle}>{title}</h3>
-        <p style={chartSubtitleStyle}>{subtitle}</p>
-      </div>
-
-      <div style={chartBodyStyle}>
-        {data.length === 0 ? (
-          <div style={emptyStateStyle}>{emptyText}</div>
-        ) : (
-          data.map((item) => {
-            const width =
-              maxValue > 0 ? `${Math.max((item.value / maxValue) * 100, 6)}%` : "0%";
-
-            const isActive = activeLabel === item.label;
-            const content = (
-              <div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "10px",
-                    marginBottom: "6px",
-                    fontFamily: fontStack,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      color: "#17212b",
-                      lineHeight: 1.3,
-                    }}
-                  >
-                    {item.label}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      color: "#0f172a",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {valueFormatter(item.value)}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    height: "10px",
-                    background: isActive ? "#dbeafe" : "#eef2f7",
-                    borderRadius: "999px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      width,
-                      height: "100%",
-                      background: isActive
-                        ? "linear-gradient(90deg, #60a5fa 0%, #1d4ed8 100%)"
-                        : "linear-gradient(90deg, #93c5fd 0%, #3b82f6 100%)",
-                      borderRadius: "999px",
-                    }}
-                  />
-                </div>
-              </div>
-            );
-
-            if (!onItemClick) {
-              return <div key={`${item.label}-${item.value}`}>{content}</div>;
-            }
-
-            return (
-              <button
-                key={`${item.label}-${item.value}`}
-                type="button"
-                onClick={() => onItemClick(item)}
-                style={{
-                  appearance: "none",
-                  border: isActive ? "1px solid #bfdbfe" : "1px solid transparent",
-                  background: isActive ? "#f8fbff" : "transparent",
-                  borderRadius: "10px",
-                  padding: "8px 10px",
-                  cursor: "pointer",
-                  textAlign: "left",
-                }}
-              >
-                {content}
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TrendChart({ title, subtitle, data, emptyText, onPointClick, activeLabel }) {
-  const fontStack =
-    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-
-  const chartCardStyle = {
-    background: "#ffffff",
-    border: "1px solid #dbe3ef",
-    borderRadius: "14px",
-    overflow: "hidden",
-    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
-  };
-
-  const chartHeaderStyle = {
-    padding: "14px 16px 10px 16px",
-    borderBottom: "1px solid #e7edf5",
-    background: "linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)",
-  };
-
-  const chartTitleStyle = {
-    margin: 0,
-    fontSize: "14px",
-    lineHeight: 1.2,
-    fontWeight: 700,
-    color: "#0f172a",
-    fontFamily: fontStack,
-  };
-
-  const chartSubtitleStyle = {
-    marginTop: "4px",
-    marginBottom: 0,
-    fontSize: "12px",
-    lineHeight: 1.4,
-    color: "#667085",
-    fontFamily: fontStack,
-    fontWeight: 400,
-  };
-
-  const chartBodyStyle = {
-    padding: "14px 16px 16px 16px",
-  };
-
-  const emptyStateStyle = {
-    color: "#5b677a",
-    fontSize: "12px",
-    fontFamily: fontStack,
-    fontWeight: 400,
-  };
-
-  if (!data.length) {
-    return (
-      <div style={chartCardStyle}>
-        <div style={chartHeaderStyle}>
-          <h3 style={chartTitleStyle}>{title}</h3>
-          <p style={chartSubtitleStyle}>{subtitle}</p>
-        </div>
-        <div style={chartBodyStyle}>
-          <div style={emptyStateStyle}>{emptyText}</div>
-        </div>
-      </div>
-    );
-  }
-
-  const width = 680;
-  const height = 260;
-  const padding = { top: 20, right: 18, bottom: 38, left: 18 };
-  const innerWidth = width - padding.left - padding.right;
-  const innerHeight = height - padding.top - padding.bottom;
-  const maxValue = Math.max(...data.map((item) => Number(item.value || 0)), 1);
-
-  const points = data.map((item, index) => {
-    const x =
-      data.length === 1
-        ? padding.left + innerWidth / 2
-        : padding.left + (index / (data.length - 1)) * innerWidth;
-    const y =
-      padding.top + innerHeight - (Number(item.value || 0) / maxValue) * innerHeight;
-
-    return {
-      ...item,
-      x,
-      y,
-    };
-  });
-
-  const path = points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`)
-    .join(" ");
-
-  return (
-    <div style={chartCardStyle}>
-      <div style={chartHeaderStyle}>
-        <h3 style={chartTitleStyle}>{title}</h3>
-        <p style={chartSubtitleStyle}>{subtitle}</p>
-      </div>
-
-      <div style={chartBodyStyle}>
-        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto" }}>
-          <line
-            x1={padding.left}
-            y1={height - padding.bottom}
-            x2={width - padding.right}
-            y2={height - padding.bottom}
-            stroke="#d7dfeb"
-            strokeWidth="1"
-          />
-
-          <path d={path} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
-
-          {points.map((point) => {
-            const isActive = activeLabel === point.label;
-            return (
-              <g
-                key={`${point.label}-${point.value}`}
-                onClick={onPointClick ? () => onPointClick(point) : undefined}
-                style={onPointClick ? { cursor: "pointer" } : undefined}
-              >
-                <circle
-                  cx={point.x}
-                  cy={point.y}
-                  r={isActive ? "6" : "4"}
-                  fill="#ffffff"
-                  stroke={isActive ? "#1d4ed8" : "#2563eb"}
-                  strokeWidth={isActive ? "3" : "2"}
-                />
-                <text
-                  x={point.x}
-                  y={height - 14}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill={isActive ? "#1d4ed8" : "#667085"}
-                  fontFamily={fontStack}
-                  fontWeight={isActive ? "700" : "400"}
-                >
-                  {point.label}
-                </text>
-                <text
-                  x={point.x}
-                  y={point.y - 10}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="#0f172a"
-                  fontWeight="600"
-                  fontFamily={fontStack}
-                >
-                  {point.value}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-    </div>
-  );
-}
 
 export default function AppIndex() {
   const { shop, orders, openOrdersDetailed, restock, summary, ordersError, loadedAt, syncStats } = useLoaderData();
@@ -1283,11 +981,12 @@ export default function AppIndex() {
   };
 
   const heroStyle = {
-    background: "linear-gradient(135deg, #ffffff 0%, #f8fbff 100%)",
-    border: "1px solid #dbe3ef",
+    background: "linear-gradient(135deg, #ffffff 0%, #f0f6ff 100%)",
+    border: "1px solid #c7d7f5",
     borderRadius: "14px",
     padding: "16px 18px",
-    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.04)",
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
+    borderLeft: "4px solid #3b82f6",
   };
 
   const heroTitleStyle = {
@@ -1361,17 +1060,35 @@ export default function AppIndex() {
 
   const getTabStyle = (isActive) => ({
     appearance: "none",
-    border: isActive ? "1px solid #c8d7eb" : "1px solid transparent",
-    background: isActive ? "#f3f7fc" : "transparent",
-    color: isActive ? "#0f172a" : "#5b677a",
+    border: isActive ? "1px solid #bfdbfe" : "1px solid transparent",
+    background: isActive ? "#dbeafe" : "transparent",
+    color: isActive ? "#1d4ed8" : "#5b677a",
     padding: "8px 14px",
     borderRadius: "10px",
     cursor: "pointer",
     fontFamily: fontStack,
     fontSize: "13px",
-    fontWeight: isActive ? 700 : 600,
-    boxShadow: isActive ? "0 1px 3px rgba(15, 23, 42, 0.06)" : "none",
+    fontWeight: isActive ? 700 : 500,
+    boxShadow: isActive ? "0 1px 4px rgba(29, 78, 216, 0.14)" : "none",
     transition: "all 0.15s ease",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+  });
+
+  const getTabBadgeStyle = (isActive) => ({
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "20px",
+    padding: "1px 5px",
+    height: "18px",
+    borderRadius: "999px",
+    fontSize: "11px",
+    fontWeight: 700,
+    lineHeight: 1,
+    background: isActive ? "#1d4ed8" : "#e2e8f0",
+    color: isActive ? "#ffffff" : "#64748b",
   });
 
   const cardStyle = {
@@ -1773,8 +1490,9 @@ export default function AppIndex() {
     gap: "10px",
     flexWrap: "wrap",
     padding: "12px 14px",
-    background: "linear-gradient(180deg, #f9fbff 0%, #f4f8ff 100%)",
-    borderBottom: "1px solid #e7edf5",
+    background: "linear-gradient(180deg, #f0f4ff 0%, #e8f0fe 100%)",
+    borderBottom: "1px solid #c7d7f5",
+    borderLeft: "3px solid #3b82f6",
   };
 
   const vendorGroupTitleStyle = {
@@ -2379,6 +2097,31 @@ export default function AppIndex() {
           </p>
         </div>
 
+        {syncStats?.truncated ? (
+          <div
+            style={{
+              display: "flex",
+              gap: "12px",
+              alignItems: "flex-start",
+              padding: "14px 16px",
+              borderRadius: "12px",
+              border: "1px solid #f4caca",
+              background: "#fff5f5",
+              boxShadow: "0 2px 6px rgba(155, 28, 28, 0.06)",
+              fontFamily: fontStack,
+            }}
+          >
+            <span style={{ fontSize: "16px", lineHeight: 1.4 }}>⚠️</span>
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "#9b1c1c", marginBottom: "4px" }}>
+                Partial data — only the most recent 2,500 orders were scanned
+              </div>
+              <div style={{ fontSize: "12px", color: "#b42318", lineHeight: 1.5 }}>
+                Your store has more open orders than this app can fetch in a single load. Shortage totals, restock lists, and analytics may be incomplete. Refresh to re-check, or contact support if this persists.
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div
           style={{
@@ -2428,27 +2171,27 @@ export default function AppIndex() {
         </div>
 
 <div style={summaryGridStyle}>
-          <div style={summaryCardStyle}>
-            <div style={summaryLabelStyle}>Open backorder orders</div>
-            <div style={summaryValueStyle}>{summary.openBackorderOrders}</div>
+          <div style={{ ...summaryCardStyle, borderLeft: "3px solid #f97316", background: "linear-gradient(135deg, #fff7ed 0%, #ffffff 60%)" }}>
+            <div style={{ ...summaryLabelStyle, color: "#c2410c" }}>Open backorder orders</div>
+            <div style={{ ...summaryValueStyle, color: "#9a3412" }}>{summary.openBackorderOrders}</div>
             <div style={summaryHelpStyle}>Orders currently affected</div>
           </div>
 
-          <div style={summaryCardStyle}>
-            <div style={summaryLabelStyle}>Total affected SKUs</div>
-            <div style={summaryValueStyle}>{summary.totalAffectedSkus}</div>
+          <div style={{ ...summaryCardStyle, borderLeft: "3px solid #f59e0b", background: "linear-gradient(135deg, #fffbeb 0%, #ffffff 60%)" }}>
+            <div style={{ ...summaryLabelStyle, color: "#b45309" }}>Total affected SKUs</div>
+            <div style={{ ...summaryValueStyle, color: "#92400e" }}>{summary.totalAffectedSkus}</div>
             <div style={summaryHelpStyle}>Unique SKUs needing action</div>
           </div>
 
-          <div style={summaryCardStyle}>
-            <div style={summaryLabelStyle}>Total shortage units</div>
-            <div style={summaryValueStyle}>{summary.totalShortageUnits}</div>
+          <div style={{ ...summaryCardStyle, borderLeft: "3px solid #dc2626", background: "linear-gradient(135deg, #fef2f2 0%, #ffffff 60%)" }}>
+            <div style={{ ...summaryLabelStyle, color: "#b91c1c" }}>Total shortage units</div>
+            <div style={{ ...summaryValueStyle, color: "#991b1b" }}>{summary.totalShortageUnits}</div>
             <div style={summaryHelpStyle}>Units short across all orders</div>
           </div>
 
-          <div style={summaryCardStyle}>
-            <div style={summaryLabelStyle}>Vendors affected</div>
-            <div style={summaryValueStyle}>{summary.vendorsAffected}</div>
+          <div style={{ ...summaryCardStyle, borderLeft: "3px solid #6366f1", background: "linear-gradient(135deg, #eef2ff 0%, #ffffff 60%)" }}>
+            <div style={{ ...summaryLabelStyle, color: "#4338ca" }}>Vendors affected</div>
+            <div style={{ ...summaryValueStyle, color: "#3730a3" }}>{summary.vendorsAffected}</div>
             <div style={summaryHelpStyle}>Suppliers impacted</div>
           </div>
         </div>
@@ -2460,6 +2203,7 @@ export default function AppIndex() {
             style={getTabStyle(activeTab === "backorders")}
           >
             Backorders
+            {orders.length > 0 && <span style={getTabBadgeStyle(activeTab === "backorders")}>{orders.length}</span>}
           </button>
 
           <button
@@ -2468,6 +2212,7 @@ export default function AppIndex() {
             style={getTabStyle(activeTab === "fulfillment")}
           >
             Fulfillment
+            {fulfillmentOrders.length > 0 && <span style={getTabBadgeStyle(activeTab === "fulfillment")}>{fulfillmentOrders.length}</span>}
           </button>
 
           <button
@@ -2476,6 +2221,7 @@ export default function AppIndex() {
             style={getTabStyle(activeTab === "restock")}
           >
             Restock
+            {restock.length > 0 && <span style={getTabBadgeStyle(activeTab === "restock")}>{restock.length}</span>}
           </button>
 
           <button
@@ -2529,14 +2275,14 @@ export default function AppIndex() {
                         </td>
                         <td style={bodyCell}>
                           <span style={mutedTextStyle}>
-                            {new Date(o.date).toLocaleDateString()}
+                            {formatDate(o.date)}
                           </span>
                         </td>
                         <td style={bodyCell}>
                           <span style={countTextStyle}>{o.items}</span>
                         </td>
                         <td style={bodyCell}>
-                          <span style={countTextStyle}>{o.unfulfilledItems}</span>
+                          <span style={o.unfulfilledItems > 1 ? shortageBadgeStyle : countTextStyle}>{o.unfulfilledItems}</span>
                         </td>
                         <td style={bodyCell}>
                           <div style={lineItemsListStyle}>
@@ -2672,7 +2418,7 @@ export default function AppIndex() {
                         </td>
                         <td style={bodyCell}>
                           <span style={mutedTextStyle}>
-                            {new Date(order.date).toLocaleDateString()}
+                            {formatDate(order.date)}
                           </span>
                         </td>
                         <td style={bodyCell}>
@@ -2842,7 +2588,7 @@ export default function AppIndex() {
                                     <span style={skuValueStyle}>{item.sku}</span>
                                   </button>
                                 </td>
-                                <td style={bodyCell}>{item.product}</td>
+                                <td style={{ ...bodyCell, maxWidth: "300px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.product}>{item.product}</td>
                                 <td style={bodyCell}>
                                   <span style={countTextStyle}>{item.totalUnfulfilled}</span>
                                 </td>
@@ -3155,7 +2901,7 @@ export default function AppIndex() {
                                 </td>
                                 <td style={bodyCell}>
                                   <span style={mutedTextStyle}>
-                                    {new Date(row.date).toLocaleDateString()}
+                                    {formatDate(row.date)}
                                   </span>
                                 </td>
                                 <td style={bodyCell}>
@@ -3338,7 +3084,7 @@ export default function AppIndex() {
                         <span style={shortageBadgeStyle}>{affected.unfulfilled} unfulfilled</span>
                       </div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", color: "#667085", fontSize: "12px" }}>
-                        <span>{new Date(affected.date).toLocaleDateString()}</span>
+                        <span>{formatDate(affected.date)}</span>
                         <span>Order ID: {affected.adminOrderId}</span>
                       </div>
                     </div>
@@ -3349,6 +3095,74 @@ export default function AppIndex() {
           </aside>
         </>
       ) : null}
+    </div>
+  );
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const fontStack =
+    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  const message =
+    error instanceof Error ? error.message : "An unexpected error occurred.";
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "linear-gradient(180deg, #f5f7fb 0%, #eef2f7 100%)",
+        padding: "14px",
+        fontFamily: fontStack,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: "600px",
+          width: "100%",
+          marginTop: "40px",
+          padding: "24px",
+          background: "#ffffff",
+          border: "1px solid #f4caca",
+          borderRadius: "14px",
+          boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 8px 0",
+            fontSize: "16px",
+            fontWeight: 700,
+            color: "#9b1c1c",
+          }}
+        >
+          Something went wrong
+        </h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#b42318", lineHeight: 1.5 }}>
+          {message}
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          style={{
+            marginTop: "16px",
+            appearance: "none",
+            border: "1px solid #f4caca",
+            background: "#fff5f5",
+            color: "#9b1c1c",
+            padding: "8px 14px",
+            borderRadius: "10px",
+            fontSize: "13px",
+            fontWeight: 600,
+            cursor: "pointer",
+            fontFamily: fontStack,
+          }}
+        >
+          Reload page
+        </button>
+      </div>
     </div>
   );
 }
