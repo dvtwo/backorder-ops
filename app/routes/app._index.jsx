@@ -2278,7 +2278,7 @@ export default function AppIndex() {
                         <td style={bodyCell}>
                           <a
                             href={getOrderAdminUrl(o.adminOrderId)}
-                            target="_top"
+                            target="_blank"
                             rel="noreferrer"
                             style={orderLinkStyle}
                           >
@@ -2421,7 +2421,7 @@ export default function AppIndex() {
                         <td style={bodyCell}>
                           <a
                             href={getOrderAdminUrl(order.adminOrderId)}
-                            target="_top"
+                            target="_blank"
                             rel="noreferrer"
                             style={orderLinkStyle}
                           >
@@ -2611,7 +2611,7 @@ export default function AppIndex() {
                                   {item.hasIncomingInventory ? (
                                     <a
                                       href={item.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
-                                      target="_top"
+                                      target="_blank"
                                       rel="noreferrer"
                                       style={orderLinkStyle}
                                       title="Open Shopify Purchase Orders"
@@ -2626,7 +2626,7 @@ export default function AppIndex() {
                                   {item.hasIncomingInventory ? (
                                     <a
                                       href={item.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
-                                      target="_top"
+                                      target="_blank"
                                       rel="noreferrer"
                                       style={orderLinkStyle}
                                       title="Open Shopify Purchase Orders"
@@ -2904,7 +2904,7 @@ export default function AppIndex() {
                                 <td style={bodyCell}>
                                   <a
                                     href={getOrderAdminUrl(row.adminOrderId)}
-                                    target="_top"
+                                    target="_blank"
                                     rel="noreferrer"
                                     style={orderLinkStyle}
                                   >
@@ -3015,7 +3015,7 @@ export default function AppIndex() {
                     {(selectedSkuItem.affectedOrders || [])[0]?.adminOrderId ? (
                       <a
                         href={getOrderAdminUrl(selectedSkuItem.affectedOrders[0].adminOrderId)}
-                        target="_top"
+                        target="_blank"
                         rel="noreferrer"
                         style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
                       >
@@ -3025,7 +3025,7 @@ export default function AppIndex() {
                     {selectedSkuItem.hasIncomingInventory ? (
                       <a
                         href={selectedSkuItem.purchaseOrderUrl || getPurchaseOrdersAdminUrl()}
-                        target="_top"
+                        target="_blank"
                         rel="noreferrer"
                         style={{ ...drawerActionButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
                       >
@@ -3087,7 +3087,7 @@ export default function AppIndex() {
                       <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
                         <a
                           href={getOrderAdminUrl(affected.adminOrderId)}
-                          target="_top"
+                          target="_blank"
                           rel="noreferrer"
                           style={orderLinkStyle}
                         >
