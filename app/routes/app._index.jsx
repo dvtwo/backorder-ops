@@ -852,27 +852,78 @@ export default function AppIndex() {
       const statusMatches =
         selectedInventoryStatus === "all" ||
         (item.status || "UNKNOWN") === selectedInventoryStatus;
-      const stockMatches =
-        selectedInventoryStockState === "all" ||
-        (selectedInventoryStockState === "in_stock" && Number(item.available || 0) > 0) ||
-        (selectedInventoryStockState === "out_of_stock" && Number(item.available || 0) <= 0);
       const locationMatches =
         allLocationsSelected ||
         normalizedSelectedLocationIds.includes(item.locationId);
 
-      return brandMatches && statusMatches && stockMatches && locationMatches;
+      return brandMatches && statusMatches && locationMatches;
     });
   }, [
     allLocationsSelected,
     inventoryCatalog,
     normalizedSelectedLocationIds,
     selectedInventoryBrand,
-    selectedInventoryStockState,
     selectedInventoryStatus,
   ]);
 
+  const inventorySkuRows = useMemo(() => {
+    const grouped = new Map();
+
+    filteredInventoryCatalog.forEach((item) => {
+      const key = item.variantId || item.sku || item.displayName || item.id;
+      const current =
+        grouped.get(key) || {
+          id: key,
+          product: item.product,
+          variant: item.variant,
+          sku: item.sku,
+          brand: item.brand,
+          status: item.status,
+          onHand: 0,
+          committed: 0,
+          unavailable: 0,
+          available: 0,
+          incoming: 0,
+          locations: [],
+        };
+
+      current.onHand += Number(item.onHand || 0);
+      current.committed += Number(item.committed || 0);
+      current.unavailable += Number(item.unavailable || 0);
+      current.available += Number(item.available || 0);
+      current.incoming += Number(item.incoming || 0);
+      current.locations.push({
+        id: item.locationId || `${key}-none`,
+        name: item.locationName,
+        onHand: Number(item.onHand || 0),
+        committed: Number(item.committed || 0),
+        unavailable: Number(item.unavailable || 0),
+        available: Number(item.available || 0),
+        incoming: Number(item.incoming || 0),
+      });
+
+      grouped.set(key, current);
+    });
+
+    return Array.from(grouped.values())
+      .filter((item) => {
+        if (selectedInventoryStockState === "in_stock") {
+          return Number(item.available || 0) > 0;
+        }
+        if (selectedInventoryStockState === "out_of_stock") {
+          return Number(item.available || 0) <= 0;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const brandCompare = (a.brand || "—").localeCompare(b.brand || "—");
+        if (brandCompare !== 0) return brandCompare;
+        return (a.product || "").localeCompare(b.product || "");
+      });
+  }, [filteredInventoryCatalog, selectedInventoryStockState]);
+
   const inventorySummary = useMemo(() => {
-    return filteredInventoryCatalog.reduce(
+    return inventorySkuRows.reduce(
       (summary, item) => ({
         onHand: summary.onHand + Number(item.onHand || 0),
         committed: summary.committed + Number(item.committed || 0),
@@ -888,7 +939,7 @@ export default function AppIndex() {
         incoming: 0,
       },
     );
-  }, [filteredInventoryCatalog]);
+  }, [inventorySkuRows]);
 
   const locationFilteredRestock = useMemo(() => {
     return restock
@@ -2352,7 +2403,7 @@ export default function AppIndex() {
       "SKU",
       "Brand",
       "Status",
-      "Location",
+      "Locations",
       "On Hand",
       "Committed",
       "Unavailable",
@@ -2362,14 +2413,21 @@ export default function AppIndex() {
 
     const csvLines = [
       headers.join(","),
-      ...filteredInventoryCatalog.map((item) =>
+      ...inventorySkuRows.map((item) =>
         [
           csvEscape(item.product),
           csvEscape(item.variant),
           csvEscape(item.sku),
           csvEscape(item.brand),
           csvEscape(formatStatus(item.status)),
-          csvEscape(item.locationName),
+          csvEscape(
+            (item.locations || [])
+              .map(
+                (location) =>
+                  `${location.name}: ${location.available} available, ${location.onHand} on hand, ${location.committed} committed, ${location.unavailable} unavailable, ${location.incoming} incoming`,
+              )
+              .join(" | "),
+          ),
           csvEscape(item.onHand),
           csvEscape(item.committed),
           csvEscape(item.unavailable),
@@ -3150,8 +3208,8 @@ export default function AppIndex() {
               </div>
 
               <div style={resultCountStyle}>
-                {filteredInventoryCatalog.length} row
-                {filteredInventoryCatalog.length === 1 ? "" : "s"}
+                {inventorySkuRows.length} SKU
+                {inventorySkuRows.length === 1 ? "" : "s"}
                 {" · "}
                 {inventorySummary.available} available
                 {" · "}
@@ -3184,9 +3242,9 @@ export default function AppIndex() {
               </div>
             </div>
 
-            {ordersError && filteredInventoryCatalog.length === 0 ? (
+            {ordersError && inventorySkuRows.length === 0 ? (
               <div style={errorStateStyle}>{ordersError}</div>
-            ) : filteredInventoryCatalog.length === 0 ? (
+            ) : inventorySkuRows.length === 0 ? (
               <div style={emptyStateStyle}>
                 No inventory rows match the current brand, location, and status filters.
               </div>
@@ -3199,7 +3257,7 @@ export default function AppIndex() {
                       <th style={headerCell}>SKU</th>
                       <th style={headerCell}>Brand</th>
                       <th style={headerCell}>Status</th>
-                      <th style={headerCell}>Location</th>
+                      <th style={headerCell}>Locations</th>
                       <th style={headerCell}>On hand</th>
                       <th style={headerCell}>Committed</th>
                       <th style={headerCell}>Unavailable</th>
@@ -3208,7 +3266,7 @@ export default function AppIndex() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredInventoryCatalog.map((item) => (
+                    {inventorySkuRows.map((item) => (
                       <tr key={item.id}>
                         <td style={{ ...bodyCell, minWidth: "260px" }}>
                           <div style={skuValueStyle}>{item.product}</div>
@@ -3225,7 +3283,27 @@ export default function AppIndex() {
                         <td style={bodyCell}>
                           <span style={badgeStyle}>{formatStatus(item.status)}</span>
                         </td>
-                        <td style={bodyCell}>{item.locationName}</td>
+                        <td style={{ ...bodyCell, minWidth: "280px" }}>
+                          <div style={lineItemsListStyle}>
+                            {(item.locations || [])
+                              .slice()
+                              .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                              .map((location) => (
+                                <div key={`${item.id}-${location.id}`} style={lineItemRowStyle}>
+                                  <div style={lineItemTextStyle}>
+                                    <span style={skuValueStyle}>{location.name}</span>
+                                  </div>
+                                  <div style={{ ...lineItemTextStyle, marginTop: "4px" }}>
+                                    {location.available} available
+                                    {"  |  "}
+                                    {location.onHand} on hand
+                                    {"  |  "}
+                                    {location.incoming} incoming
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </td>
                         <td style={bodyCell}>
                           <span style={countTextStyle}>{item.onHand}</span>
                         </td>
