@@ -874,6 +874,7 @@ export default function AppIndex() {
       const current =
         grouped.get(key) || {
           id: key,
+          productId: item.productId,
           product: item.product,
           variant: item.variant,
           sku: item.sku,
@@ -1773,6 +1774,13 @@ export default function AppIndex() {
     },
   };
 
+  const inventoryStatusBadgeStyles = {
+    ACTIVE: fulfillmentBadgeStyles.ready_to_ship,
+    DRAFT: fulfillmentBadgeStyles.waiting_for_stock,
+    ARCHIVED: fulfillmentBadgeStyles.partially_in_stock,
+    UNKNOWN: fulfillmentBadgeStyles.waiting_for_stock,
+  };
+
   const emptyStateStyle = {
     padding: "16px 18px 18px 18px",
     color: "#5b677a",
@@ -2240,6 +2248,12 @@ export default function AppIndex() {
   const getPurchaseOrdersAdminUrl = () => {
     if (!shop) return "#";
     return `https://${shop}/admin/purchase_orders`;
+  };
+
+  const getProductAdminUrl = (productId) => {
+    const adminProductId = productId?.split("/").pop() || "";
+    if (!shop || !adminProductId) return "#";
+    return `https://${shop}/admin/products/${adminProductId}`;
   };
 
   const openSkuDrawer = (key) => {
@@ -3252,11 +3266,21 @@ export default function AppIndex() {
                           ) : null}
                         </td>
                         <td style={bodyCell}>
-                          <span style={countTextStyle}>{item.sku}</span>
+                          <a
+                            href={getProductAdminUrl(item.productId)}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={orderLinkStyle}
+                            title="Open product in Shopify Admin"
+                          >
+                            {item.sku}
+                          </a>
                         </td>
                         <td style={bodyCell}>{item.brand}</td>
                         <td style={bodyCell}>
-                          <span style={badgeStyle}>{formatStatus(item.status)}</span>
+                          <span style={inventoryStatusBadgeStyles[item.status] || inventoryStatusBadgeStyles.UNKNOWN}>
+                            {formatStatus(item.status)}
+                          </span>
                         </td>
                         <td style={{ ...bodyCell, minWidth: "280px" }}>
                           <div style={lineItemsListStyle}>
