@@ -764,6 +764,7 @@ export default function AppIndex() {
   const [activeTab, setActiveTab] = useState("backorders");
   const [shipStatusFilter, setShipStatusFilter] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
+  const [inventorySearchQuery, setInventorySearchQuery] = useState("");
   const [selectedInventoryBrand, setSelectedInventoryBrand] = useState("all");
   const [selectedInventoryStatus, setSelectedInventoryStatus] = useState("all");
   const [selectedInventoryStockState, setSelectedInventoryStockState] = useState("all");
@@ -845,7 +846,19 @@ export default function AppIndex() {
       : `${normalizedSelectedLocationIds.length} locations`;
 
   const filteredInventoryCatalog = useMemo(() => {
+    const normalizedSearch = inventorySearchQuery.trim().toLowerCase();
+
     return (inventoryCatalog || []).filter((item) => {
+      const searchMatches =
+        normalizedSearch.length === 0 ||
+        [
+          item.sku,
+          item.product,
+          item.variant,
+          item.displayName,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(normalizedSearch));
       const brandMatches =
         selectedInventoryBrand === "all" ||
         (item.brand || "—") === selectedInventoryBrand;
@@ -856,10 +869,11 @@ export default function AppIndex() {
         allLocationsSelected ||
         normalizedSelectedLocationIds.includes(item.locationId);
 
-      return brandMatches && statusMatches && locationMatches;
+      return searchMatches && brandMatches && statusMatches && locationMatches;
     });
   }, [
     allLocationsSelected,
+    inventorySearchQuery,
     inventoryCatalog,
     normalizedSelectedLocationIds,
     selectedInventoryBrand,
@@ -1576,6 +1590,11 @@ export default function AppIndex() {
     minWidth: "220px",
     outline: "none",
     boxSizing: "border-box",
+  };
+
+  const searchInputStyle = {
+    ...selectStyle,
+    minWidth: "280px",
   };
 
   const filterGroupStyle = {
@@ -3114,6 +3133,20 @@ export default function AppIndex() {
 
             <div style={toolbarStyle}>
               <div style={toolbarControlsStyle}>
+                <div style={filterGroupStyle}>
+                  <label htmlFor="inventory-search-filter" style={labelStyle}>
+                    Search
+                  </label>
+                  <input
+                    id="inventory-search-filter"
+                    type="search"
+                    value={inventorySearchQuery}
+                    onChange={(event) => setInventorySearchQuery(event.target.value)}
+                    placeholder="Search SKU or product"
+                    style={searchInputStyle}
+                  />
+                </div>
+
                 <div style={filterGroupStyle}>
                   <label htmlFor="inventory-brand-filter" style={labelStyle}>
                     Brand
