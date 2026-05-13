@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useRevalidator, useRouteError } from "react-router";
+import {
+  useFetcher,
+  useLoaderData,
+  useRevalidator,
+  useRouteError,
+} from "react-router";
 import { authenticate } from "../shopify.server";
 import HorizontalBarChart from "../components/HorizontalBarChart";
 import TrendChart from "../components/TrendChart";
@@ -28,8 +33,6 @@ const LINE_ITEMS_PAGE_SIZE = 100;
 const INVENTORY_BATCH_SIZE = 40;
 const MAX_ORDER_PAGES = 25;
 const INVENTORY_LEVELS_PAGE_SIZE = 100;
-const PRODUCT_VARIANTS_PAGE_SIZE = 100;
-const MAX_PRODUCT_VARIANT_PAGES = 30;
 
 const emptySummary = {
   openBackorderOrders: 0,
@@ -44,11 +47,10 @@ const emptySyncStats = {
   lineItemsFetched: 0,
   extraLineItemQueries: 0,
   inventoryItemsFetched: 0,
-  productVariantPages: 0,
-  productVariantsFetched: 0,
-  productVariantsTruncated: false,
   truncated: false,
 };
+
+const emptyInventoryCatalog = [];
 
 async function graphqlJson(admin, query, variables = {}) {
   const response = await admin.graphql(query, { variables });
@@ -322,215 +324,16 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
   return inventoryByItemId;
 }
 
-const quantityValue = (quantities = [], name) =>
-  Number(quantities.find((quantity) => quantity?.name === name)?.quantity || 0);
-
-const normalizeInventoryLevel = (level) => {
-  const quantities = level?.quantities || [];
-  const reserved = quantityValue(quantities, "reserved");
-  const damaged = quantityValue(quantities, "damaged");
-  const qualityControl = quantityValue(quantities, "quality_control");
-  const safetyStock = quantityValue(quantities, "safety_stock");
-
-  return {
-    locationId: level?.location?.id || "",
-    locationName: level?.location?.name || "Unknown location",
-    onHand: quantityValue(quantities, "on_hand"),
-    committed: quantityValue(quantities, "committed"),
-    unavailable: reserved + damaged + qualityControl + safetyStock,
-    available: quantityValue(quantities, "available"),
-    incoming: quantityValue(quantities, "incoming"),
-  };
-};
-
-async function fetchInventoryLevelPages(admin, inventoryItemId, firstPageEdges, firstPageInfo) {
-  const edges = [...(firstPageEdges || [])];
-  let hasNextPage = Boolean(firstPageInfo?.hasNextPage);
-  let after = firstPageInfo?.endCursor || null;
-
-  while (hasNextPage) {
-    const data = await graphqlJson(
-      admin,
-      `#graphql
-        query InventoryCatalogLevelPage($id: ID!, $first: Int!, $after: String) {
-          inventoryItem(id: $id) {
-            id
-            inventoryLevels(first: $first, after: $after) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  location {
-                    id
-                    name
-                  }
-                  quantities(names: ["available", "incoming", "committed", "damaged", "on_hand", "quality_control", "reserved", "safety_stock"]) {
-                    name
-                    quantity
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-      { id: inventoryItemId, first: INVENTORY_LEVELS_PAGE_SIZE, after },
-    );
-
-    const connection = data?.inventoryItem?.inventoryLevels;
-    edges.push(...(connection?.edges || []));
-    hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
-    after = connection?.pageInfo?.endCursor || null;
-  }
-
-  return edges;
-}
-
-async function fetchInventoryCatalog(admin) {
-  const inventoryRows = [];
-  let hasNextPage = true;
-  let after = null;
-  let productVariantPages = 0;
-  let productVariantsFetched = 0;
-
-  while (hasNextPage && productVariantPages < MAX_PRODUCT_VARIANT_PAGES) {
-    const data = await graphqlJson(
-      admin,
-      `#graphql
-        query InventoryCatalogVariants($first: Int!, $after: String, $levelsFirst: Int!) {
-          productVariants(first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-            edges {
-              node {
-                id
-                title
-                sku
-                displayName
-                product {
-                  id
-                  title
-                  vendor
-                  status
-                }
-                inventoryItem {
-                  id
-                  inventoryLevels(first: $levelsFirst) {
-                    pageInfo {
-                      hasNextPage
-                      endCursor
-                    }
-                    edges {
-                      node {
-                        location {
-                          id
-                          name
-                        }
-                        quantities(names: ["available", "incoming", "committed", "damaged", "on_hand", "quality_control", "reserved", "safety_stock"]) {
-                          name
-                          quantity
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-      {
-        first: PRODUCT_VARIANTS_PAGE_SIZE,
-        after,
-        levelsFirst: INVENTORY_LEVELS_PAGE_SIZE,
-      },
-    );
-
-    const connection = data?.productVariants;
-    const edges = connection?.edges || [];
-    productVariantPages += 1;
-    productVariantsFetched += edges.length;
-
-    for (const edge of edges) {
-      const variant = edge?.node;
-      if (!variant?.id) continue;
-
-      const inventoryItemId = variant?.inventoryItem?.id || "";
-      const inventoryLevelConnection = variant?.inventoryItem?.inventoryLevels;
-      const inventoryLevelEdges = inventoryItemId
-        ? await fetchInventoryLevelPages(
-            admin,
-            inventoryItemId,
-            inventoryLevelConnection?.edges || [],
-            inventoryLevelConnection?.pageInfo,
-          )
-        : [];
-
-      const levels = inventoryLevelEdges
-        .map((levelEdge) => normalizeInventoryLevel(levelEdge?.node))
-        .filter(Boolean);
-      const rowLevels = levels.length
-        ? levels
-        : [
-            {
-              locationId: "",
-              locationName: "No inventory location",
-              onHand: 0,
-              committed: 0,
-              unavailable: 0,
-              available: 0,
-              incoming: 0,
-            },
-          ];
-
-      rowLevels.forEach((level) => {
-        inventoryRows.push({
-          id: `${variant.id}-${level.locationId || "none"}`,
-          productId: variant.product?.id || "",
-          variantId: variant.id,
-          inventoryItemId,
-          product: variant.product?.title || variant.displayName || "Untitled product",
-          variant: variant.title === "Default Title" ? "" : variant.title || "",
-          displayName: variant.displayName || variant.product?.title || "Untitled product",
-          sku: variant.sku || "—",
-          brand: variant.product?.vendor || "—",
-          status: variant.product?.status || "UNKNOWN",
-          ...level,
-        });
-      });
-    }
-
-    hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
-    after = connection?.pageInfo?.endCursor || null;
-  }
-
-  return {
-    inventoryRows,
-    stats: {
-      productVariantPages,
-      productVariantsFetched,
-      productVariantsTruncated: hasNextPage,
-    },
-  };
-}
-
 export const loader = async ({ request }) => {
   try {
     const { admin, session } = await authenticate.admin(request);
     const loadedAt = new Date().toISOString();
 
     const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
-    const { inventoryRows: inventoryCatalog, stats: inventoryStats } =
-      await fetchInventoryCatalog(admin);
 
     if (stats.truncated) {
       return {
         shop: session.shop,
-        inventoryCatalog,
         orders: [],
         openOrdersDetailed: [],
         restock: [],
@@ -540,7 +343,6 @@ export const loader = async ({ request }) => {
         syncStats: {
           ...emptySyncStats,
           ...stats,
-          ...inventoryStats,
         },
       };
     }
@@ -718,7 +520,6 @@ export const loader = async ({ request }) => {
 
     return {
       shop: session.shop,
-      inventoryCatalog,
       orders,
       openOrdersDetailed,
       restock,
@@ -728,14 +529,12 @@ export const loader = async ({ request }) => {
       syncStats: {
         ...emptySyncStats,
         ...stats,
-        ...inventoryStats,
         inventoryItemsFetched: inventoryItemIds.length,
       },
     };
   } catch (error) {
     return {
       shop: "",
-      inventoryCatalog: [],
       orders: [],
       openOrdersDetailed: [],
       restock: [],
@@ -750,7 +549,6 @@ export const loader = async ({ request }) => {
 export default function AppIndex() {
   const {
     shop,
-    inventoryCatalog,
     orders,
     openOrdersDetailed,
     restock,
@@ -759,15 +557,25 @@ export default function AppIndex() {
     loadedAt,
     syncStats,
   } = useLoaderData();
+  const inventoryFetcher = useFetcher();
   const revalidator = useRevalidator();
   const isRefreshing = revalidator.state !== "idle";
+  const inventoryCatalog =
+    inventoryFetcher.data?.inventoryCatalog || emptyInventoryCatalog;
+  const inventoryError = inventoryFetcher.data?.inventoryError || "";
+  const inventoryLoadedAt = inventoryFetcher.data?.loadedAt || "";
+  const inventoryStats = inventoryFetcher.data?.stats || null;
   const [activeTab, setActiveTab] = useState("backorders");
+  const isInventoryLoading =
+    activeTab === "inventory" &&
+    !inventoryFetcher.data;
   const [shipStatusFilter, setShipStatusFilter] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [inventorySearchQuery, setInventorySearchQuery] = useState("");
   const [selectedInventoryBrand, setSelectedInventoryBrand] = useState("all");
   const [selectedInventoryStatus, setSelectedInventoryStatus] = useState("all");
   const [selectedInventoryStockState, setSelectedInventoryStockState] = useState("all");
+  const [inventoryLoadProgress, setInventoryLoadProgress] = useState(8);
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [selectedSkuKey, setSelectedSkuKey] = useState(null);
   const [copiedAction, setCopiedAction] = useState("");
@@ -1352,6 +1160,33 @@ export default function AppIndex() {
     });
   }, [activeTab, analytics.drilldownRows.length, analyticsDrilldown.type]);
 
+  useEffect(() => {
+    if (activeTab !== "inventory") return;
+    if (inventoryFetcher.data || inventoryFetcher.state !== "idle") return;
+    inventoryFetcher.load("/app/inventory");
+  }, [activeTab, inventoryFetcher]);
+
+  useEffect(() => {
+    if (inventoryFetcher.state !== "idle") {
+      setInventoryLoadProgress((current) => (current > 0 ? current : 8));
+      const interval = window.setInterval(() => {
+        setInventoryLoadProgress((current) => {
+          if (current >= 95) return current;
+          const remaining = 95 - current;
+          return Math.min(95, current + Math.max(1, Math.round(remaining * 0.08)));
+        });
+      }, 300);
+
+      return () => window.clearInterval(interval);
+    }
+
+    if (inventoryFetcher.data) {
+      setInventoryLoadProgress(100);
+    }
+
+    return undefined;
+  }, [inventoryFetcher.data, inventoryFetcher.state]);
+
 
   useEffect(() => {
     if (!selectedSkuItem && selectedSkuKey) {
@@ -1669,6 +1504,37 @@ export default function AppIndex() {
     ...summaryGridStyle,
     gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
   };
+
+  const inventoryLoadingPanelStyle = {
+    padding: "30px 18px",
+    borderTop: "1px solid #e7edf5",
+    background: "#f8fafc",
+  };
+
+  const inventoryLoadingCardStyle = {
+    maxWidth: "520px",
+    margin: "0 auto",
+    border: "1px solid #dbe3ef",
+    borderRadius: "14px",
+    background: "#ffffff",
+    padding: "18px",
+    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+  };
+
+  const inventoryProgressTrackStyle = {
+    height: "10px",
+    borderRadius: "999px",
+    overflow: "hidden",
+    background: "#e7edf5",
+  };
+
+  const getInventoryProgressFillStyle = (value) => ({
+    width: `${value}%`,
+    height: "100%",
+    borderRadius: "999px",
+    background: "linear-gradient(90deg, #2563eb 0%, #16a34a 100%)",
+    transition: "width 220ms ease",
+  });
 
   const filterGroupStyle = {
     display: "flex",
@@ -2687,9 +2553,7 @@ export default function AppIndex() {
               Last loaded {loadedAt ? new Date(loadedAt).toLocaleString() : "just now"}
               {syncStats?.ordersFetched ? ` • ${syncStats.ordersFetched} open orders scanned` : ""}
               {syncStats?.inventoryItemsFetched ? ` • ${syncStats.inventoryItemsFetched} inventory items checked` : ""}
-              {syncStats?.productVariantsFetched ? ` • ${syncStats.productVariantsFetched} product variants loaded` : ""}
               {syncStats?.truncated ? " • Reached pagination safety limit" : ""}
-              {syncStats?.productVariantsTruncated ? " • Inventory catalog reached pagination safety limit" : ""}
             </div>
           </div>
 
@@ -3204,6 +3068,47 @@ export default function AppIndex() {
               </p>
             </div>
 
+            {isInventoryLoading ? (
+              <div style={inventoryLoadingPanelStyle}>
+                <div style={inventoryLoadingCardStyle}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "16px",
+                      alignItems: "center",
+                      marginBottom: "12px",
+                    }}
+                  >
+                    <div>
+                      <div style={{ ...sectionTitleStyle, fontSize: "14px" }}>
+                        Loading inventory
+                      </div>
+                      <div style={sectionTextStyle}>
+                        Fetching products, locations, and current quantities.
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "22px",
+                        fontWeight: 800,
+                        color: "#1d4ed8",
+                        minWidth: "58px",
+                        textAlign: "right",
+                      }}
+                    >
+                      {inventoryLoadProgress}%
+                    </div>
+                  </div>
+                  <div style={inventoryProgressTrackStyle}>
+                    <div style={getInventoryProgressFillStyle(inventoryLoadProgress)} />
+                  </div>
+                </div>
+              </div>
+            ) : inventoryError ? (
+              <div style={errorStateStyle}>{inventoryError}</div>
+            ) : (
+              <>
             <div style={inventoryToolbarStyle}>
               <div style={inventoryControlsGridStyle}>
                 <div style={inventoryFilterGroupStyle}>
@@ -3307,11 +3212,25 @@ export default function AppIndex() {
               </div>
 
               <div style={inventoryActionsRowStyle}>
-                <div style={inventoryResultPillStyle}>
-                  {inventorySkuRows.length} SKU
-                  {inventorySkuRows.length === 1 ? "" : "s"}
-                  {" · "}
-                  {inventorySummary.available} available
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <div style={inventoryResultPillStyle}>
+                    {inventorySkuRows.length} SKU
+                    {inventorySkuRows.length === 1 ? "" : "s"}
+                    {" · "}
+                    {inventorySummary.available} available
+                  </div>
+                  {inventoryStats ? (
+                    <div style={inventoryResultPillStyle}>
+                      {inventoryStats.productVariantsFetched} variants loaded
+                      {inventoryLoadedAt
+                        ? ` · ${new Date(inventoryLoadedAt).toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}`
+                        : ""}
+                      {inventoryStats.productVariantsTruncated ? " · partial" : ""}
+                    </div>
+                  ) : null}
                 </div>
 
                 <button
@@ -3428,6 +3347,8 @@ export default function AppIndex() {
                   </tbody>
                 </table>
               </div>
+            )}
+              </>
             )}
           </div>
         ) : (
