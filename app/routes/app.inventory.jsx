@@ -13,6 +13,12 @@ export const loader = async ({ request }) => {
       stats,
     };
   } catch (error) {
+    if (error instanceof Response) {
+      throw error;
+    }
+
+    console.error("Inventory catalog load failed", error);
+
     return {
       inventoryCatalog: [],
       inventoryError:

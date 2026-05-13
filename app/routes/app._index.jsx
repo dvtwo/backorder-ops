@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useFetcher,
   useLoaderData,
+  useLocation,
   useRevalidator,
   useRouteError,
 } from "react-router";
@@ -558,6 +559,7 @@ export default function AppIndex() {
     syncStats,
   } = useLoaderData();
   const inventoryFetcher = useFetcher();
+  const location = useLocation();
   const revalidator = useRevalidator();
   const isRefreshing = revalidator.state !== "idle";
   const inventoryCatalog =
@@ -1163,8 +1165,8 @@ export default function AppIndex() {
   useEffect(() => {
     if (activeTab !== "inventory") return;
     if (inventoryFetcher.data || inventoryFetcher.state !== "idle") return;
-    inventoryFetcher.load("/app/inventory");
-  }, [activeTab, inventoryFetcher]);
+    inventoryFetcher.load(`/app/inventory${location.search || ""}`);
+  }, [activeTab, inventoryFetcher, location.search]);
 
   useEffect(() => {
     if (inventoryFetcher.state !== "idle") {
