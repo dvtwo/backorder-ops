@@ -28,6 +28,8 @@ const LINE_ITEMS_PAGE_SIZE = 100;
 const INVENTORY_BATCH_SIZE = 40;
 const MAX_ORDER_PAGES = 25;
 const INVENTORY_LEVELS_PAGE_SIZE = 100;
+const PRODUCT_VARIANTS_PAGE_SIZE = 100;
+const MAX_PRODUCT_VARIANT_PAGES = 30;
 
 const emptySummary = {
   openBackorderOrders: 0,
@@ -42,6 +44,9 @@ const emptySyncStats = {
   lineItemsFetched: 0,
   extraLineItemQueries: 0,
   inventoryItemsFetched: 0,
+  productVariantPages: 0,
+  productVariantsFetched: 0,
+  productVariantsTruncated: false,
   truncated: false,
 };
 
@@ -317,16 +322,215 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
   return inventoryByItemId;
 }
 
+const quantityValue = (quantities = [], name) =>
+  Number(quantities.find((quantity) => quantity?.name === name)?.quantity || 0);
+
+const normalizeInventoryLevel = (level) => {
+  const quantities = level?.quantities || [];
+  const reserved = quantityValue(quantities, "reserved");
+  const damaged = quantityValue(quantities, "damaged");
+  const qualityControl = quantityValue(quantities, "quality_control");
+  const safetyStock = quantityValue(quantities, "safety_stock");
+
+  return {
+    locationId: level?.location?.id || "",
+    locationName: level?.location?.name || "Unknown location",
+    onHand: quantityValue(quantities, "on_hand"),
+    committed: quantityValue(quantities, "committed"),
+    unavailable: reserved + damaged + qualityControl + safetyStock,
+    available: quantityValue(quantities, "available"),
+    incoming: quantityValue(quantities, "incoming"),
+  };
+};
+
+async function fetchInventoryLevelPages(admin, inventoryItemId, firstPageEdges, firstPageInfo) {
+  const edges = [...(firstPageEdges || [])];
+  let hasNextPage = Boolean(firstPageInfo?.hasNextPage);
+  let after = firstPageInfo?.endCursor || null;
+
+  while (hasNextPage) {
+    const data = await graphqlJson(
+      admin,
+      `#graphql
+        query InventoryCatalogLevelPage($id: ID!, $first: Int!, $after: String) {
+          inventoryItem(id: $id) {
+            id
+            inventoryLevels(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  location {
+                    id
+                    name
+                  }
+                  quantities(names: ["available", "incoming", "committed", "damaged", "on_hand", "quality_control", "reserved", "safety_stock"]) {
+                    name
+                    quantity
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      { id: inventoryItemId, first: INVENTORY_LEVELS_PAGE_SIZE, after },
+    );
+
+    const connection = data?.inventoryItem?.inventoryLevels;
+    edges.push(...(connection?.edges || []));
+    hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+    after = connection?.pageInfo?.endCursor || null;
+  }
+
+  return edges;
+}
+
+async function fetchInventoryCatalog(admin) {
+  const inventoryRows = [];
+  let hasNextPage = true;
+  let after = null;
+  let productVariantPages = 0;
+  let productVariantsFetched = 0;
+
+  while (hasNextPage && productVariantPages < MAX_PRODUCT_VARIANT_PAGES) {
+    const data = await graphqlJson(
+      admin,
+      `#graphql
+        query InventoryCatalogVariants($first: Int!, $after: String, $levelsFirst: Int!) {
+          productVariants(first: $first, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                sku
+                displayName
+                product {
+                  id
+                  title
+                  vendor
+                  status
+                }
+                inventoryItem {
+                  id
+                  inventoryLevels(first: $levelsFirst) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
+                    edges {
+                      node {
+                        location {
+                          id
+                          name
+                        }
+                        quantities(names: ["available", "incoming", "committed", "damaged", "on_hand", "quality_control", "reserved", "safety_stock"]) {
+                          name
+                          quantity
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        first: PRODUCT_VARIANTS_PAGE_SIZE,
+        after,
+        levelsFirst: INVENTORY_LEVELS_PAGE_SIZE,
+      },
+    );
+
+    const connection = data?.productVariants;
+    const edges = connection?.edges || [];
+    productVariantPages += 1;
+    productVariantsFetched += edges.length;
+
+    for (const edge of edges) {
+      const variant = edge?.node;
+      if (!variant?.id) continue;
+
+      const inventoryItemId = variant?.inventoryItem?.id || "";
+      const inventoryLevelConnection = variant?.inventoryItem?.inventoryLevels;
+      const inventoryLevelEdges = inventoryItemId
+        ? await fetchInventoryLevelPages(
+            admin,
+            inventoryItemId,
+            inventoryLevelConnection?.edges || [],
+            inventoryLevelConnection?.pageInfo,
+          )
+        : [];
+
+      const levels = inventoryLevelEdges
+        .map((levelEdge) => normalizeInventoryLevel(levelEdge?.node))
+        .filter(Boolean);
+      const rowLevels = levels.length
+        ? levels
+        : [
+            {
+              locationId: "",
+              locationName: "No inventory location",
+              onHand: 0,
+              committed: 0,
+              unavailable: 0,
+              available: 0,
+              incoming: 0,
+            },
+          ];
+
+      rowLevels.forEach((level) => {
+        inventoryRows.push({
+          id: `${variant.id}-${level.locationId || "none"}`,
+          productId: variant.product?.id || "",
+          variantId: variant.id,
+          inventoryItemId,
+          product: variant.product?.title || variant.displayName || "Untitled product",
+          variant: variant.title === "Default Title" ? "" : variant.title || "",
+          displayName: variant.displayName || variant.product?.title || "Untitled product",
+          sku: variant.sku || "—",
+          brand: variant.product?.vendor || "—",
+          status: variant.product?.status || "UNKNOWN",
+          ...level,
+        });
+      });
+    }
+
+    hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+    after = connection?.pageInfo?.endCursor || null;
+  }
+
+  return {
+    inventoryRows,
+    stats: {
+      productVariantPages,
+      productVariantsFetched,
+      productVariantsTruncated: hasNextPage,
+    },
+  };
+}
+
 export const loader = async ({ request }) => {
   try {
     const { admin, session } = await authenticate.admin(request);
     const loadedAt = new Date().toISOString();
 
     const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
+    const { inventoryRows: inventoryCatalog, stats: inventoryStats } =
+      await fetchInventoryCatalog(admin);
 
     if (stats.truncated) {
       return {
         shop: session.shop,
+        inventoryCatalog,
         orders: [],
         openOrdersDetailed: [],
         restock: [],
@@ -336,6 +540,7 @@ export const loader = async ({ request }) => {
         syncStats: {
           ...emptySyncStats,
           ...stats,
+          ...inventoryStats,
         },
       };
     }
@@ -513,6 +718,7 @@ export const loader = async ({ request }) => {
 
     return {
       shop: session.shop,
+      inventoryCatalog,
       orders,
       openOrdersDetailed,
       restock,
@@ -522,12 +728,14 @@ export const loader = async ({ request }) => {
       syncStats: {
         ...emptySyncStats,
         ...stats,
+        ...inventoryStats,
         inventoryItemsFetched: inventoryItemIds.length,
       },
     };
   } catch (error) {
     return {
       shop: "",
+      inventoryCatalog: [],
       orders: [],
       openOrdersDetailed: [],
       restock: [],
@@ -540,12 +748,24 @@ export const loader = async ({ request }) => {
 };
 
 export default function AppIndex() {
-  const { shop, orders, openOrdersDetailed, restock, summary, ordersError, loadedAt, syncStats } = useLoaderData();
+  const {
+    shop,
+    inventoryCatalog,
+    orders,
+    openOrdersDetailed,
+    restock,
+    summary,
+    ordersError,
+    loadedAt,
+    syncStats,
+  } = useLoaderData();
   const revalidator = useRevalidator();
   const isRefreshing = revalidator.state !== "idle";
   const [activeTab, setActiveTab] = useState("backorders");
   const [shipStatusFilter, setShipStatusFilter] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
+  const [selectedInventoryBrand, setSelectedInventoryBrand] = useState("all");
+  const [selectedInventoryStatus, setSelectedInventoryStatus] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [selectedSkuKey, setSelectedSkuKey] = useState(null);
   const [copiedAction, setCopiedAction] = useState("");
@@ -563,6 +783,20 @@ export default function AppIndex() {
     return ["all", ...vendors];
   }, [restock]);
 
+  const inventoryBrandOptions = useMemo(() => {
+    const brands = Array.from(
+      new Set((inventoryCatalog || []).map((item) => item.brand || "—")),
+    ).sort((a, b) => a.localeCompare(b));
+    return ["all", ...brands];
+  }, [inventoryCatalog]);
+
+  const inventoryStatusOptions = useMemo(() => {
+    const statuses = Array.from(
+      new Set((inventoryCatalog || []).map((item) => item.status || "UNKNOWN")),
+    ).sort((a, b) => a.localeCompare(b));
+    return ["all", ...statuses];
+  }, [inventoryCatalog]);
+
   const locationOptions = useMemo(() => {
     const locations = [];
     const seen = new Set();
@@ -578,8 +812,17 @@ export default function AppIndex() {
       });
     });
 
+    (inventoryCatalog || []).forEach((item) => {
+      if (!item?.locationId || seen.has(item.locationId)) return;
+      seen.add(item.locationId);
+      locations.push({
+        id: item.locationId,
+        name: item.locationName || "Unknown location",
+      });
+    });
+
     return locations.sort((a, b) => a.name.localeCompare(b.name));
-  }, [restock]);
+  }, [inventoryCatalog, restock]);
 
   const normalizedSelectedLocationIds = useMemo(() => {
     if (selectedLocationIds.length === 0) return [];
@@ -599,6 +842,47 @@ export default function AppIndex() {
           (location) => location.id === normalizedSelectedLocationIds[0],
         )?.name || "1 location"
       : `${normalizedSelectedLocationIds.length} locations`;
+
+  const filteredInventoryCatalog = useMemo(() => {
+    return (inventoryCatalog || []).filter((item) => {
+      const brandMatches =
+        selectedInventoryBrand === "all" ||
+        (item.brand || "—") === selectedInventoryBrand;
+      const statusMatches =
+        selectedInventoryStatus === "all" ||
+        (item.status || "UNKNOWN") === selectedInventoryStatus;
+      const locationMatches =
+        allLocationsSelected ||
+        normalizedSelectedLocationIds.includes(item.locationId);
+
+      return brandMatches && statusMatches && locationMatches;
+    });
+  }, [
+    allLocationsSelected,
+    inventoryCatalog,
+    normalizedSelectedLocationIds,
+    selectedInventoryBrand,
+    selectedInventoryStatus,
+  ]);
+
+  const inventorySummary = useMemo(() => {
+    return filteredInventoryCatalog.reduce(
+      (summary, item) => ({
+        onHand: summary.onHand + Number(item.onHand || 0),
+        committed: summary.committed + Number(item.committed || 0),
+        unavailable: summary.unavailable + Number(item.unavailable || 0),
+        available: summary.available + Number(item.available || 0),
+        incoming: summary.incoming + Number(item.incoming || 0),
+      }),
+      {
+        onHand: 0,
+        committed: 0,
+        unavailable: 0,
+        available: 0,
+        incoming: 0,
+      },
+    );
+  }, [filteredInventoryCatalog]);
 
   const locationFilteredRestock = useMemo(() => {
     return restock
@@ -2055,6 +2339,68 @@ export default function AppIndex() {
     return stringValue;
   };
 
+  const exportInventoryCsv = () => {
+    const headers = [
+      "Product",
+      "Variant",
+      "SKU",
+      "Brand",
+      "Status",
+      "Location",
+      "On Hand",
+      "Committed",
+      "Unavailable",
+      "Available",
+      "Incoming",
+    ];
+
+    const csvLines = [
+      headers.join(","),
+      ...filteredInventoryCatalog.map((item) =>
+        [
+          csvEscape(item.product),
+          csvEscape(item.variant),
+          csvEscape(item.sku),
+          csvEscape(item.brand),
+          csvEscape(formatStatus(item.status)),
+          csvEscape(item.locationName),
+          csvEscape(item.onHand),
+          csvEscape(item.committed),
+          csvEscape(item.unavailable),
+          csvEscape(item.available),
+          csvEscape(item.incoming),
+        ].join(","),
+      ),
+    ];
+
+    const csvContent = csvLines.join("\n");
+    const blob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const brandSlug =
+      selectedInventoryBrand === "all"
+        ? "all-brands"
+        : selectedInventoryBrand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const statusSlug =
+      selectedInventoryStatus === "all"
+        ? "all-statuses"
+        : selectedInventoryStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const locationSlug =
+      allLocationsSelected
+        ? "all-locations"
+        : selectedLocationSummary.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const fileName = `inventory-${brandSlug}-${statusSlug}-${locationSlug}.csv`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const exportRestockCsv = () => {
     const rows = filteredRestock.map((item) => ({
       sku: item.sku,
@@ -2181,7 +2527,9 @@ export default function AppIndex() {
               Last loaded {loadedAt ? new Date(loadedAt).toLocaleString() : "just now"}
               {syncStats?.ordersFetched ? ` • ${syncStats.ordersFetched} open orders scanned` : ""}
               {syncStats?.inventoryItemsFetched ? ` • ${syncStats.inventoryItemsFetched} inventory items checked` : ""}
+              {syncStats?.productVariantsFetched ? ` • ${syncStats.productVariantsFetched} product variants loaded` : ""}
               {syncStats?.truncated ? " • Reached pagination safety limit" : ""}
+              {syncStats?.productVariantsTruncated ? " • Inventory catalog reached pagination safety limit" : ""}
             </div>
           </div>
 
@@ -2257,6 +2605,19 @@ export default function AppIndex() {
           >
             Restock
             {restock.length > 0 && <span style={getTabBadgeStyle(activeTab === "restock")}>{restock.length}</span>}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("inventory")}
+            style={getTabStyle(activeTab === "inventory")}
+          >
+            Inventory
+            {(inventoryCatalog || []).length > 0 && (
+              <span style={getTabBadgeStyle(activeTab === "inventory")}>
+                {(inventoryCatalog || []).length}
+              </span>
+            )}
           </button>
 
           <button
@@ -2671,6 +3032,193 @@ export default function AppIndex() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        ) : activeTab === "inventory" ? (
+          <div style={cardStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={sectionTitleStyle}>Inventory catalog</h2>
+              <p style={sectionTextStyle}>
+                Product inventory by location with brand, status, and exportable quantity details.
+              </p>
+            </div>
+
+            <div style={toolbarStyle}>
+              <div style={toolbarControlsStyle}>
+                <div style={filterGroupStyle}>
+                  <label htmlFor="inventory-brand-filter" style={labelStyle}>
+                    Brand
+                  </label>
+                  <select
+                    id="inventory-brand-filter"
+                    value={selectedInventoryBrand}
+                    onChange={(event) => setSelectedInventoryBrand(event.target.value)}
+                    style={selectStyle}
+                  >
+                    {inventoryBrandOptions.map((brand) => (
+                      <option key={brand} value={brand}>
+                        {brand === "all" ? "All brands" : brand}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={filterGroupStyle}>
+                  <label htmlFor="inventory-status-filter" style={labelStyle}>
+                    Status
+                  </label>
+                  <select
+                    id="inventory-status-filter"
+                    value={selectedInventoryStatus}
+                    onChange={(event) => setSelectedInventoryStatus(event.target.value)}
+                    style={selectStyle}
+                  >
+                    {inventoryStatusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {status === "all" ? "All statuses" : formatStatus(status)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={filterGroupStyle}>
+                  <span style={labelStyle}>Inventory locations</span>
+                  <details data-location-popover="true" style={locationPopoverStyle}>
+                    <summary style={locationButtonStyle}>
+                      {selectedLocationSummary}
+                    </summary>
+                    <div style={locationMenuStyle}>
+                      <label style={locationOptionRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={allLocationsSelected}
+                          onChange={handleAllLocationsToggle}
+                        />
+                        <span>All locations</span>
+                      </label>
+                      <div style={locationHintStyle}>
+                        Choose one or more locations to filter inventory rows.
+                      </div>
+                      {locationOptions.map((location) => (
+                        <label key={location.id} style={locationOptionRowStyle}>
+                          <input
+                            type="checkbox"
+                            checked={allLocationsSelected || normalizedSelectedLocationIds.includes(location.id)}
+                            onChange={() => handleLocationToggle(location.id)}
+                          />
+                          <span>{location.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={exportInventoryCsv}
+                  style={exportButtonStyle}
+                >
+                  Export CSV
+                </button>
+              </div>
+
+              <div style={resultCountStyle}>
+                {filteredInventoryCatalog.length} row
+                {filteredInventoryCatalog.length === 1 ? "" : "s"}
+                {" · "}
+                {inventorySummary.available} available
+                {" · "}
+                {inventorySummary.incoming} incoming
+              </div>
+            </div>
+
+            <div style={summaryGridStyle}>
+              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #2563eb" }}>
+                <div style={summaryLabelStyle}>On hand</div>
+                <div style={summaryValueStyle}>{inventorySummary.onHand}</div>
+                <div style={summaryHelpStyle}>Filtered location stock</div>
+              </div>
+              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #7c3aed" }}>
+                <div style={summaryLabelStyle}>Committed</div>
+                <div style={summaryValueStyle}>{inventorySummary.committed}</div>
+                <div style={summaryHelpStyle}>Allocated to orders</div>
+              </div>
+              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #64748b" }}>
+                <div style={summaryLabelStyle}>Unavailable</div>
+                <div style={summaryValueStyle}>{inventorySummary.unavailable}</div>
+                <div style={summaryHelpStyle}>Reserved or not sellable</div>
+              </div>
+              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #16a34a" }}>
+                <div style={summaryLabelStyle}>Available / incoming</div>
+                <div style={summaryValueStyle}>
+                  {inventorySummary.available} / {inventorySummary.incoming}
+                </div>
+                <div style={summaryHelpStyle}>Sellable now and inbound</div>
+              </div>
+            </div>
+
+            {ordersError && filteredInventoryCatalog.length === 0 ? (
+              <div style={errorStateStyle}>{ordersError}</div>
+            ) : filteredInventoryCatalog.length === 0 ? (
+              <div style={emptyStateStyle}>
+                No inventory rows match the current brand, location, and status filters.
+              </div>
+            ) : (
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={headerCell}>Product</th>
+                      <th style={headerCell}>SKU</th>
+                      <th style={headerCell}>Brand</th>
+                      <th style={headerCell}>Status</th>
+                      <th style={headerCell}>Location</th>
+                      <th style={headerCell}>On hand</th>
+                      <th style={headerCell}>Committed</th>
+                      <th style={headerCell}>Unavailable</th>
+                      <th style={headerCell}>Available</th>
+                      <th style={headerCell}>Incoming</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredInventoryCatalog.map((item) => (
+                      <tr key={item.id}>
+                        <td style={{ ...bodyCell, minWidth: "260px" }}>
+                          <div style={skuValueStyle}>{item.product}</div>
+                          {item.variant ? (
+                            <div style={{ ...mutedTextStyle, marginTop: "4px" }}>
+                              {item.variant}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.sku}</span>
+                        </td>
+                        <td style={bodyCell}>{item.brand}</td>
+                        <td style={bodyCell}>
+                          <span style={badgeStyle}>{formatStatus(item.status)}</span>
+                        </td>
+                        <td style={bodyCell}>{item.locationName}</td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.onHand}</span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.committed}</span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.unavailable}</span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.available}</span>
+                        </td>
+                        <td style={bodyCell}>
+                          <span style={countTextStyle}>{item.incoming}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
