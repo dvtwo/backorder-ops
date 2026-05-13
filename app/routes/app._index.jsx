@@ -766,6 +766,7 @@ export default function AppIndex() {
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [selectedInventoryBrand, setSelectedInventoryBrand] = useState("all");
   const [selectedInventoryStatus, setSelectedInventoryStatus] = useState("all");
+  const [selectedInventoryStockState, setSelectedInventoryStockState] = useState("all");
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [selectedSkuKey, setSelectedSkuKey] = useState(null);
   const [copiedAction, setCopiedAction] = useState("");
@@ -851,17 +852,22 @@ export default function AppIndex() {
       const statusMatches =
         selectedInventoryStatus === "all" ||
         (item.status || "UNKNOWN") === selectedInventoryStatus;
+      const stockMatches =
+        selectedInventoryStockState === "all" ||
+        (selectedInventoryStockState === "in_stock" && Number(item.available || 0) > 0) ||
+        (selectedInventoryStockState === "out_of_stock" && Number(item.available || 0) <= 0);
       const locationMatches =
         allLocationsSelected ||
         normalizedSelectedLocationIds.includes(item.locationId);
 
-      return brandMatches && statusMatches && locationMatches;
+      return brandMatches && statusMatches && stockMatches && locationMatches;
     });
   }, [
     allLocationsSelected,
     inventoryCatalog,
     normalizedSelectedLocationIds,
     selectedInventoryBrand,
+    selectedInventoryStockState,
     selectedInventoryStatus,
   ]);
 
@@ -2385,11 +2391,15 @@ export default function AppIndex() {
       selectedInventoryStatus === "all"
         ? "all-statuses"
         : selectedInventoryStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const stockSlug =
+      selectedInventoryStockState === "all"
+        ? "all-stock"
+        : selectedInventoryStockState.replace(/_/g, "-");
     const locationSlug =
       allLocationsSelected
         ? "all-locations"
         : selectedLocationSummary.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const fileName = `inventory-${brandSlug}-${statusSlug}-${locationSlug}.csv`;
+    const fileName = `inventory-${brandSlug}-${statusSlug}-${stockSlug}-${locationSlug}.csv`;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
 
@@ -3079,6 +3089,22 @@ export default function AppIndex() {
                         {status === "all" ? "All statuses" : formatStatus(status)}
                       </option>
                     ))}
+                  </select>
+                </div>
+
+                <div style={filterGroupStyle}>
+                  <label htmlFor="inventory-stock-filter" style={labelStyle}>
+                    Stock
+                  </label>
+                  <select
+                    id="inventory-stock-filter"
+                    value={selectedInventoryStockState}
+                    onChange={(event) => setSelectedInventoryStockState(event.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="all">All stock states</option>
+                    <option value="in_stock">In stock only</option>
+                    <option value="out_of_stock">Out of stock only</option>
                   </select>
                 </div>
 
