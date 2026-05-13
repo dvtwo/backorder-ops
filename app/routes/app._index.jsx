@@ -1592,9 +1592,71 @@ export default function AppIndex() {
     boxSizing: "border-box",
   };
 
-  const searchInputStyle = {
+  const inventoryToolbarStyle = {
+    display: "grid",
+    gap: "12px",
+    padding: "16px 18px",
+    borderBottom: "1px solid #e7edf5",
+    background: "#f8fafc",
+  };
+
+  const inventoryControlsGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "minmax(280px, 1.45fr) repeat(4, minmax(180px, 1fr))",
+    gap: "12px",
+    alignItems: "end",
+  };
+
+  const inventoryFilterGroupStyle = {
+    display: "grid",
+    gap: "6px",
+    minWidth: 0,
+  };
+
+  const inventoryControlStyle = {
     ...selectStyle,
-    minWidth: "280px",
+    width: "100%",
+    minWidth: 0,
+    height: "42px",
+    borderRadius: "12px",
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.03)",
+  };
+
+  const inventorySearchInputStyle = {
+    ...inventoryControlStyle,
+    minWidth: 0,
+  };
+
+  const inventoryLocationButtonStyle = {
+    ...inventoryControlStyle,
+    cursor: "pointer",
+    textAlign: "left",
+    display: "flex",
+    alignItems: "center",
+    listStyle: "none",
+  };
+
+  const inventoryActionsRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    flexWrap: "wrap",
+    paddingTop: "2px",
+  };
+
+  const inventoryResultPillStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    minHeight: "32px",
+    padding: "0 10px",
+    border: "1px solid #dbe3ef",
+    borderRadius: "999px",
+    background: "#ffffff",
+    color: "#667085",
+    fontSize: "12px",
+    fontWeight: 700,
+    whiteSpace: "nowrap",
   };
 
   const filterGroupStyle = {
@@ -3131,9 +3193,9 @@ export default function AppIndex() {
               </p>
             </div>
 
-            <div style={toolbarStyle}>
-              <div style={toolbarControlsStyle}>
-                <div style={filterGroupStyle}>
+            <div style={inventoryToolbarStyle}>
+              <div style={inventoryControlsGridStyle}>
+                <div style={inventoryFilterGroupStyle}>
                   <label htmlFor="inventory-search-filter" style={labelStyle}>
                     Search
                   </label>
@@ -3143,11 +3205,11 @@ export default function AppIndex() {
                     value={inventorySearchQuery}
                     onChange={(event) => setInventorySearchQuery(event.target.value)}
                     placeholder="Search SKU or product"
-                    style={searchInputStyle}
+                    style={inventorySearchInputStyle}
                   />
                 </div>
 
-                <div style={filterGroupStyle}>
+                <div style={inventoryFilterGroupStyle}>
                   <label htmlFor="inventory-brand-filter" style={labelStyle}>
                     Brand
                   </label>
@@ -3155,7 +3217,7 @@ export default function AppIndex() {
                     id="inventory-brand-filter"
                     value={selectedInventoryBrand}
                     onChange={(event) => setSelectedInventoryBrand(event.target.value)}
-                    style={selectStyle}
+                    style={inventoryControlStyle}
                   >
                     {inventoryBrandOptions.map((brand) => (
                       <option key={brand} value={brand}>
@@ -3165,7 +3227,7 @@ export default function AppIndex() {
                   </select>
                 </div>
 
-                <div style={filterGroupStyle}>
+                <div style={inventoryFilterGroupStyle}>
                   <label htmlFor="inventory-status-filter" style={labelStyle}>
                     Status
                   </label>
@@ -3173,7 +3235,7 @@ export default function AppIndex() {
                     id="inventory-status-filter"
                     value={selectedInventoryStatus}
                     onChange={(event) => setSelectedInventoryStatus(event.target.value)}
-                    style={selectStyle}
+                    style={inventoryControlStyle}
                   >
                     {inventoryStatusOptions.map((status) => (
                       <option key={status} value={status}>
@@ -3183,7 +3245,7 @@ export default function AppIndex() {
                   </select>
                 </div>
 
-                <div style={filterGroupStyle}>
+                <div style={inventoryFilterGroupStyle}>
                   <label htmlFor="inventory-stock-filter" style={labelStyle}>
                     Stock
                   </label>
@@ -3191,7 +3253,7 @@ export default function AppIndex() {
                     id="inventory-stock-filter"
                     value={selectedInventoryStockState}
                     onChange={(event) => setSelectedInventoryStockState(event.target.value)}
-                    style={selectStyle}
+                    style={inventoryControlStyle}
                   >
                     <option value="all">All stock states</option>
                     <option value="in_stock">In stock only</option>
@@ -3199,10 +3261,10 @@ export default function AppIndex() {
                   </select>
                 </div>
 
-                <div style={filterGroupStyle}>
-                  <span style={labelStyle}>Inventory locations</span>
+                <div style={inventoryFilterGroupStyle}>
+                  <span style={labelStyle}>Locations</span>
                   <details data-location-popover="true" style={locationPopoverStyle}>
-                    <summary style={locationButtonStyle}>
+                    <summary style={inventoryLocationButtonStyle}>
                       {selectedLocationSummary}
                     </summary>
                     <div style={locationMenuStyle}>
@@ -3231,6 +3293,16 @@ export default function AppIndex() {
                   </details>
                 </div>
 
+              </div>
+
+              <div style={inventoryActionsRowStyle}>
+                <div style={inventoryResultPillStyle}>
+                  {inventorySkuRows.length} SKU
+                  {inventorySkuRows.length === 1 ? "" : "s"}
+                  {" · "}
+                  {inventorySummary.available} available
+                </div>
+
                 <button
                   type="button"
                   onClick={exportInventoryCsv}
@@ -3238,13 +3310,6 @@ export default function AppIndex() {
                 >
                   Export CSV
                 </button>
-              </div>
-
-              <div style={resultCountStyle}>
-                {inventorySkuRows.length} SKU
-                {inventorySkuRows.length === 1 ? "" : "s"}
-                {" · "}
-                {inventorySummary.available} available
               </div>
             </div>
 
