@@ -1659,6 +1659,17 @@ export default function AppIndex() {
     whiteSpace: "nowrap",
   };
 
+  const inventorySummaryBandStyle = {
+    padding: "0 18px 18px 18px",
+    borderBottom: "1px solid #e7edf5",
+    background: "#f8fafc",
+  };
+
+  const inventorySummaryGridStyle = {
+    ...summaryGridStyle,
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  };
+
   const filterGroupStyle = {
     display: "flex",
     alignItems: "center",
@@ -3313,21 +3324,23 @@ export default function AppIndex() {
               </div>
             </div>
 
-            <div style={summaryGridStyle}>
-              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #2563eb" }}>
-                <div style={summaryLabelStyle}>On hand</div>
-                <div style={summaryValueStyle}>{inventorySummary.onHand}</div>
-                <div style={summaryHelpStyle}>Filtered location stock</div>
-              </div>
-              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #7c3aed" }}>
-                <div style={summaryLabelStyle}>Committed</div>
-                <div style={summaryValueStyle}>{inventorySummary.committed}</div>
-                <div style={summaryHelpStyle}>Allocated to orders</div>
-              </div>
-              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #16a34a" }}>
-                <div style={summaryLabelStyle}>Available</div>
-                <div style={summaryValueStyle}>{inventorySummary.available}</div>
-                <div style={summaryHelpStyle}>Sellable now</div>
+            <div style={inventorySummaryBandStyle}>
+              <div style={inventorySummaryGridStyle}>
+                <div style={{ ...summaryCardStyle, borderLeft: "3px solid #2563eb" }}>
+                  <div style={summaryLabelStyle}>On hand</div>
+                  <div style={summaryValueStyle}>{inventorySummary.onHand}</div>
+                  <div style={summaryHelpStyle}>Filtered location stock</div>
+                </div>
+                <div style={{ ...summaryCardStyle, borderLeft: "3px solid #7c3aed" }}>
+                  <div style={summaryLabelStyle}>Committed</div>
+                  <div style={summaryValueStyle}>{inventorySummary.committed}</div>
+                  <div style={summaryHelpStyle}>Allocated to orders</div>
+                </div>
+                <div style={{ ...summaryCardStyle, borderLeft: "3px solid #16a34a" }}>
+                  <div style={summaryLabelStyle}>Available</div>
+                  <div style={summaryValueStyle}>{inventorySummary.available}</div>
+                  <div style={summaryHelpStyle}>Sellable now</div>
+                </div>
               </div>
             </div>
 
