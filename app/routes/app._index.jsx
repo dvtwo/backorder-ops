@@ -881,25 +881,19 @@ export default function AppIndex() {
           status: item.status,
           onHand: 0,
           committed: 0,
-          unavailable: 0,
           available: 0,
-          incoming: 0,
           locations: [],
         };
 
       current.onHand += Number(item.onHand || 0);
       current.committed += Number(item.committed || 0);
-      current.unavailable += Number(item.unavailable || 0);
       current.available += Number(item.available || 0);
-      current.incoming += Number(item.incoming || 0);
       current.locations.push({
         id: item.locationId || `${key}-none`,
         name: item.locationName,
         onHand: Number(item.onHand || 0),
         committed: Number(item.committed || 0),
-        unavailable: Number(item.unavailable || 0),
         available: Number(item.available || 0),
-        incoming: Number(item.incoming || 0),
       });
 
       grouped.set(key, current);
@@ -927,16 +921,12 @@ export default function AppIndex() {
       (summary, item) => ({
         onHand: summary.onHand + Number(item.onHand || 0),
         committed: summary.committed + Number(item.committed || 0),
-        unavailable: summary.unavailable + Number(item.unavailable || 0),
         available: summary.available + Number(item.available || 0),
-        incoming: summary.incoming + Number(item.incoming || 0),
       }),
       {
         onHand: 0,
         committed: 0,
-        unavailable: 0,
         available: 0,
-        incoming: 0,
       },
     );
   }, [inventorySkuRows]);
@@ -2406,9 +2396,7 @@ export default function AppIndex() {
       "Locations",
       "On Hand",
       "Committed",
-      "Unavailable",
       "Available",
-      "Incoming",
     ];
 
     const csvLines = [
@@ -2424,15 +2412,13 @@ export default function AppIndex() {
             (item.locations || [])
               .map(
                 (location) =>
-                  `${location.name}: ${location.available} available, ${location.onHand} on hand, ${location.committed} committed, ${location.unavailable} unavailable, ${location.incoming} incoming`,
+                  `${location.name}: ${location.available} available, ${location.onHand} on hand, ${location.committed} committed`,
               )
               .join(" | "),
           ),
           csvEscape(item.onHand),
           csvEscape(item.committed),
-          csvEscape(item.unavailable),
           csvEscape(item.available),
-          csvEscape(item.incoming),
         ].join(","),
       ),
     ];
@@ -3212,8 +3198,6 @@ export default function AppIndex() {
                 {inventorySkuRows.length === 1 ? "" : "s"}
                 {" · "}
                 {inventorySummary.available} available
-                {" · "}
-                {inventorySummary.incoming} incoming
               </div>
             </div>
 
@@ -3228,17 +3212,10 @@ export default function AppIndex() {
                 <div style={summaryValueStyle}>{inventorySummary.committed}</div>
                 <div style={summaryHelpStyle}>Allocated to orders</div>
               </div>
-              <div style={{ ...summaryCardStyle, borderLeft: "3px solid #64748b" }}>
-                <div style={summaryLabelStyle}>Unavailable</div>
-                <div style={summaryValueStyle}>{inventorySummary.unavailable}</div>
-                <div style={summaryHelpStyle}>Reserved or not sellable</div>
-              </div>
               <div style={{ ...summaryCardStyle, borderLeft: "3px solid #16a34a" }}>
-                <div style={summaryLabelStyle}>Available / incoming</div>
-                <div style={summaryValueStyle}>
-                  {inventorySummary.available} / {inventorySummary.incoming}
-                </div>
-                <div style={summaryHelpStyle}>Sellable now and inbound</div>
+                <div style={summaryLabelStyle}>Available</div>
+                <div style={summaryValueStyle}>{inventorySummary.available}</div>
+                <div style={summaryHelpStyle}>Sellable now</div>
               </div>
             </div>
 
@@ -3260,9 +3237,7 @@ export default function AppIndex() {
                       <th style={headerCell}>Locations</th>
                       <th style={headerCell}>On hand</th>
                       <th style={headerCell}>Committed</th>
-                      <th style={headerCell}>Unavailable</th>
                       <th style={headerCell}>Available</th>
-                      <th style={headerCell}>Incoming</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3298,7 +3273,7 @@ export default function AppIndex() {
                                     {"  |  "}
                                     {location.onHand} on hand
                                     {"  |  "}
-                                    {location.incoming} incoming
+                                    {location.committed} committed
                                   </div>
                                 </div>
                               ))}
@@ -3311,13 +3286,7 @@ export default function AppIndex() {
                           <span style={countTextStyle}>{item.committed}</span>
                         </td>
                         <td style={bodyCell}>
-                          <span style={countTextStyle}>{item.unavailable}</span>
-                        </td>
-                        <td style={bodyCell}>
                           <span style={countTextStyle}>{item.available}</span>
-                        </td>
-                        <td style={bodyCell}>
-                          <span style={countTextStyle}>{item.incoming}</span>
                         </td>
                       </tr>
                     ))}
