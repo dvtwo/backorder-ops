@@ -1,6 +1,26 @@
 const PRODUCT_VARIANTS_PAGE_SIZE = 100;
 const INVENTORY_LEVELS_PAGE_SIZE = 100;
 const MAX_PRODUCT_VARIANT_PAGES = 30;
+const INVENTORY_CATALOG_LEVEL_CONCURRENCY = 4;
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+
+  return results;
+}
 
 async function graphqlJson(admin, query, variables = {}) {
   const response = await admin.graphql(query, { variables });
@@ -146,9 +166,12 @@ export async function fetchInventoryCatalog(admin) {
     productVariantPages += 1;
     productVariantsFetched += edges.length;
 
-    for (const edge of edges) {
+    const pageRows = await mapWithConcurrency(
+      edges,
+      INVENTORY_CATALOG_LEVEL_CONCURRENCY,
+      async (edge) => {
       const variant = edge?.node;
-      if (!variant?.id) continue;
+      if (!variant?.id) return [];
 
       const inventoryItemId = variant?.inventoryItem?.id || "";
       const inventoryLevelConnection = variant?.inventoryItem?.inventoryLevels;
@@ -178,8 +201,7 @@ export async function fetchInventoryCatalog(admin) {
             },
           ];
 
-      rowLevels.forEach((level) => {
-        inventoryRows.push({
+      return rowLevels.map((level) => ({
           id: `${variant.id}-${level.locationId || "none"}`,
           productId: variant.product?.id || "",
           variantId: variant.id,
@@ -191,9 +213,10 @@ export async function fetchInventoryCatalog(admin) {
           brand: variant.product?.vendor || "-",
           status: variant.product?.status || "UNKNOWN",
           ...level,
-        });
-      });
-    }
+        }));
+    });
+
+    inventoryRows.push(...pageRows.flat());
 
     hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
     after = connection?.pageInfo?.endCursor || null;

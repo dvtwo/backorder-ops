@@ -3,10 +3,10 @@ import {
   useFetcher,
   useLoaderData,
   useLocation,
-  useRevalidator,
   useRouteError,
 } from "react-router";
 import { authenticate } from "../shopify.server";
+import { getCachedValue } from "../cache.server";
 import HorizontalBarChart from "../components/HorizontalBarChart";
 import TrendChart from "../components/TrendChart";
 
@@ -34,6 +34,31 @@ const LINE_ITEMS_PAGE_SIZE = 100;
 const INVENTORY_BATCH_SIZE = 40;
 const MAX_ORDER_PAGES = 25;
 const INVENTORY_LEVELS_PAGE_SIZE = 100;
+const DASHBOARD_CACHE_TTL_MS = 90 * 1000;
+const ORDER_DETAIL_CONCURRENCY = 4;
+const INVENTORY_BATCH_CONCURRENCY = 2;
+const INVENTORY_LEVEL_CONCURRENCY = 4;
+const INITIAL_VISIBLE_ROWS = 75;
+const ROW_INCREMENT = 75;
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+
+  return results;
+}
 
 const emptySummary = {
   openBackorderOrders: 0,
@@ -123,13 +148,17 @@ async function fetchAllOpenOrders(admin) {
     const orderEdges = orderConnection?.edges || [];
     orderPages += 1;
 
-    for (const edge of orderEdges) {
+    const pageOrderResults = await mapWithConcurrency(
+      orderEdges,
+      ORDER_DETAIL_CONCURRENCY,
+      async (edge) => {
       const order = edge?.node;
-      if (!order?.id) continue;
+      if (!order?.id) return null;
 
       const initialLineItemEdges = order?.lineItems?.edges || [];
       const lineItems = initialLineItemEdges.map((lineEdge) => lineEdge?.node).filter(Boolean);
-      lineItemsFetched += lineItems.length;
+      let orderLineItemsFetched = lineItems.length;
+      let orderExtraLineItemQueries = 0;
 
       let lineItemsHasNextPage = Boolean(order?.lineItems?.pageInfo?.hasNextPage);
       let lineItemsAfter = order?.lineItems?.pageInfo?.endCursor || null;
@@ -173,20 +202,30 @@ async function fetchAllOpenOrders(admin) {
         const extraEdges = lineItemsData?.order?.lineItems?.edges || [];
         const extraNodes = extraEdges.map((lineEdge) => lineEdge?.node).filter(Boolean);
         lineItems.push(...extraNodes);
-        lineItemsFetched += extraNodes.length;
-        extraLineItemQueries += 1;
+        orderLineItemsFetched += extraNodes.length;
+        orderExtraLineItemQueries += 1;
         lineItemsHasNextPage = Boolean(lineItemsData?.order?.lineItems?.pageInfo?.hasNextPage);
         lineItemsAfter = lineItemsData?.order?.lineItems?.pageInfo?.endCursor || null;
       }
 
-      orders.push({
-        id: order.id,
-        name: order.name,
-        createdAt: order.createdAt,
-        displayFulfillmentStatus: order.displayFulfillmentStatus,
-        lineItems,
-      });
-    }
+      return {
+        order: {
+          id: order.id,
+          name: order.name,
+          createdAt: order.createdAt,
+          displayFulfillmentStatus: order.displayFulfillmentStatus,
+          lineItems,
+        },
+        lineItemsFetched: orderLineItemsFetched,
+        extraLineItemQueries: orderExtraLineItemQueries,
+      };
+    });
+
+    pageOrderResults.filter(Boolean).forEach((result) => {
+      orders.push(result.order);
+      lineItemsFetched += result.lineItemsFetched;
+      extraLineItemQueries += result.extraLineItemQueries;
+    });
 
     hasNextPage = Boolean(orderConnection?.pageInfo?.hasNextPage);
     after = orderConnection?.pageInfo?.endCursor || null;
@@ -241,7 +280,10 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
     };
   };
 
-  for (const ids of chunkArray(inventoryItemIds, INVENTORY_BATCH_SIZE)) {
+  await mapWithConcurrency(
+    chunkArray(inventoryItemIds, INVENTORY_BATCH_SIZE),
+    INVENTORY_BATCH_CONCURRENCY,
+    async (ids) => {
     const data = await graphqlJson(
       admin,
       `#graphql
@@ -274,9 +316,10 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
       { ids },
     );
 
-    for (const inventoryItem of data?.nodes || []) {
-      if (!inventoryItem?.id) continue;
-
+    await mapWithConcurrency(
+      (data?.nodes || []).filter((inventoryItem) => inventoryItem?.id),
+      INVENTORY_LEVEL_CONCURRENCY,
+      async (inventoryItem) => {
       const inventoryLevelEdges = [...(inventoryItem?.inventoryLevels?.edges || [])];
       let hasNextPage = Boolean(inventoryItem?.inventoryLevels?.pageInfo?.hasNextPage);
       let after = inventoryItem?.inventoryLevels?.pageInfo?.endCursor || null;
@@ -319,218 +362,234 @@ async function fetchInventoryByItemId(admin, inventoryItemIds) {
       }
 
       setInventoryRecord(inventoryItem.id, toLocationInventory(inventoryLevelEdges));
-    }
-  }
+    });
+  });
 
   return inventoryByItemId;
+}
+
+async function buildDashboardSnapshot(admin, shop) {
+  const loadedAt = new Date().toISOString();
+
+  const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
+
+  if (stats.truncated) {
+    return {
+      shop,
+      orders: [],
+      openOrdersDetailed: [],
+      restock: [],
+      summary: emptySummary,
+      ordersError: `Backorder data is incomplete because more than ${MAX_ORDER_PAGES * ORDERS_PAGE_SIZE} open orders matched the scan. Narrow the order query or move this to a background sync before using these totals.`,
+      loadedAt,
+      syncStats: {
+        ...emptySyncStats,
+        ...stats,
+      },
+    };
+  }
+
+  const inventoryItemIds = Array.from(
+    new Set(
+      rawOrders
+        .flatMap((order) => order.lineItems || [])
+        .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
+        .map((item) => item?.variant?.inventoryItem?.id)
+        .filter(Boolean),
+    ),
+  );
+
+  const inventoryByItemId = await fetchInventoryByItemId(admin, inventoryItemIds);
+  const skuMap = {};
+
+  rawOrders.forEach((node) => {
+    const adminOrderId = node.id?.split("/").pop() || "";
+    const lineItems = node.lineItems || [];
+
+    lineItems.forEach((item) => {
+      const unfulfilled = Number(item.unfulfilledQuantity || 0);
+      if (unfulfilled <= 0) return;
+
+      const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
+      const inventoryItemId = item.variant?.inventoryItem?.id || null;
+      const inventoryRecord = inventoryByItemId[inventoryItemId] || (
+        inventoryItemId === null
+          ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
+          : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
+      );
+
+      if (!skuMap[key]) {
+        skuMap[key] = {
+          key,
+          sku: item.sku || "—",
+          product: item.title,
+          vendor: item.vendor || "—",
+          variantId: item.variant?.id || null,
+          inventory: inventoryRecord.inventory,
+          totalUnfulfilled: 0,
+          shortage: 0,
+          affectedOrders: [],
+          incomingInventory: Number(inventoryRecord.incomingInventory || 0),
+          hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
+          purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
+            ? `https://${shop}/admin/purchase_orders`
+            : "",
+          locationInventory: inventoryRecord.locationInventory,
+        };
+      }
+
+      skuMap[key].totalUnfulfilled += unfulfilled;
+      skuMap[key].affectedOrders.push({
+        orderId: node.id,
+        adminOrderId,
+        orderName: node.name,
+        date: node.createdAt,
+        unfulfilled,
+      });
+    });
+  });
+
+  Object.values(skuMap).forEach((item) => {
+    item.shortage = Math.max(item.totalUnfulfilled - item.inventory, 0);
+    item.affectedOrders.sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+  });
+
+  const openOrdersDetailed = rawOrders
+    .map((node) => {
+      const adminOrderId = node.id?.split("/").pop() || "";
+      const unfulfilledLineItems = (node.lineItems || [])
+        .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
+        .map((item) => {
+          const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
+          const inventoryItemId = item.variant?.inventoryItem?.id || null;
+          const inventoryRecord = inventoryByItemId[inventoryItemId] || (
+            inventoryItemId === null
+              ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
+              : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
+          );
+
+          return {
+            id: item.id,
+            key,
+            sku: item.sku || "—",
+            product: item.title,
+            vendor: item.vendor || "—",
+            quantity: Number(item.quantity || 0),
+            unfulfilled: Number(item.unfulfilledQuantity || 0),
+            variantId: item.variant?.id || null,
+            inventoryItemId,
+            inventory: Number(inventoryRecord.inventory || 0),
+            incomingInventory: Number(inventoryRecord.incomingInventory || 0),
+            hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
+            purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
+              ? `https://${shop}/admin/purchase_orders`
+              : "",
+            locationInventory: inventoryRecord.locationInventory || [],
+          };
+        });
+
+      return {
+        id: node.id,
+        adminOrderId,
+        name: node.name,
+        date: node.createdAt,
+        status: node.displayFulfillmentStatus,
+        items: (node.lineItems || []).length,
+        unfulfilledLineItems,
+      };
+    })
+    .filter((order) => (order.unfulfilledLineItems || []).length > 0);
+
+  const orders = rawOrders
+    .map((node) => {
+      const lineItems = node.lineItems || [];
+
+      const backorderedLineItems = lineItems
+        .filter((item) => Number(item.unfulfilledQuantity || 0) > 0)
+        .map((item) => ({
+          id: item.id,
+          key: item.variant?.id || item.sku || `${item.title}-${item.id}`,
+          sku: item.sku || "—",
+          vendor: item.vendor || "—",
+        }));
+
+      const adminOrderId = node.id?.split("/").pop() || "";
+
+      return {
+        id: node.id,
+        adminOrderId,
+        name: node.name,
+        date: node.createdAt,
+        items: lineItems.length,
+        unfulfilledItems: backorderedLineItems.length,
+        status: node.displayFulfillmentStatus,
+        backorderedLineItems,
+      };
+    })
+    .filter((order) => order.unfulfilledItems > 0);
+
+  const restock = Object.values(skuMap)
+    .sort((a, b) => {
+      const vendorCompare = (a.vendor || "—").localeCompare(b.vendor || "—");
+      if (vendorCompare !== 0) return vendorCompare;
+      return b.shortage - a.shortage;
+    });
+
+  const allLocationShortages = restock.filter((item) => item.shortage > 0);
+  const allLocationShortageKeys = new Set(
+    allLocationShortages.map((item) => String(item.key || "")),
+  );
+
+  const summary = {
+    openBackorderOrders: orders.filter((order) =>
+      (order.backorderedLineItems || []).some((item) =>
+        allLocationShortageKeys.has(String(item.key || "")),
+      ),
+    ).length,
+    totalAffectedSkus: allLocationShortages.length,
+    totalShortageUnits: allLocationShortages.reduce(
+      (sum, item) => sum + Number(item.shortage || 0),
+      0,
+    ),
+    vendorsAffected: new Set(allLocationShortages.map((item) => item.vendor || "—")).size,
+  };
+
+  return {
+    shop,
+    orders,
+    openOrdersDetailed,
+    restock,
+    summary,
+    ordersError: "",
+    loadedAt,
+    syncStats: {
+      ...emptySyncStats,
+      ...stats,
+      inventoryItemsFetched: inventoryItemIds.length,
+    },
+  };
 }
 
 export const loader = async ({ request }) => {
   try {
     const { admin, session } = await authenticate.admin(request);
-    const loadedAt = new Date().toISOString();
-
-    const { orders: rawOrders, stats } = await fetchAllOpenOrders(admin);
-
-    if (stats.truncated) {
-      return {
-        shop: session.shop,
-        orders: [],
-        openOrdersDetailed: [],
-        restock: [],
-        summary: emptySummary,
-        ordersError: `Backorder data is incomplete because more than ${MAX_ORDER_PAGES * ORDERS_PAGE_SIZE} open orders matched the scan. Narrow the order query or move this to a background sync before using these totals.`,
-        loadedAt,
-        syncStats: {
-          ...emptySyncStats,
-          ...stats,
-        },
-      };
-    }
-
-    const inventoryItemIds = Array.from(
-      new Set(
-        rawOrders
-          .flatMap((order) => order.lineItems || [])
-          .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
-          .map((item) => item?.variant?.inventoryItem?.id)
-          .filter(Boolean),
-      ),
+    const url = new URL(request.url);
+    const force = url.searchParams.has("refresh");
+    const { value, cached, cachedAt } = await getCachedValue(
+      `dashboard:${session.shop}`,
+      DASHBOARD_CACHE_TTL_MS,
+      () => buildDashboardSnapshot(admin, session.shop),
+      { force },
     );
-
-    const inventoryByItemId = await fetchInventoryByItemId(admin, inventoryItemIds);
-    const skuMap = {};
-
-    rawOrders.forEach((node) => {
-      const adminOrderId = node.id?.split("/").pop() || "";
-      const lineItems = node.lineItems || [];
-
-      lineItems.forEach((item) => {
-        const unfulfilled = Number(item.unfulfilledQuantity || 0);
-        if (unfulfilled <= 0) return;
-
-        const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
-        const inventoryItemId = item.variant?.inventoryItem?.id || null;
-        const inventoryRecord = inventoryByItemId[inventoryItemId] || (
-          inventoryItemId === null
-            ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
-            : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
-        );
-
-        if (!skuMap[key]) {
-          skuMap[key] = {
-            key,
-            sku: item.sku || "—",
-            product: item.title,
-            vendor: item.vendor || "—",
-            variantId: item.variant?.id || null,
-            inventory: inventoryRecord.inventory,
-            totalUnfulfilled: 0,
-            shortage: 0,
-            affectedOrders: [],
-            incomingInventory: Number(inventoryRecord.incomingInventory || 0),
-            hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
-            purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
-              ? `https://${session.shop}/admin/purchase_orders`
-              : "",
-            locationInventory: inventoryRecord.locationInventory,
-          };
-        }
-
-        skuMap[key].totalUnfulfilled += unfulfilled;
-        skuMap[key].affectedOrders.push({
-          orderId: node.id,
-          adminOrderId,
-          orderName: node.name,
-          date: node.createdAt,
-          unfulfilled,
-        });
-      });
-    });
-
-    Object.values(skuMap).forEach((item) => {
-      item.shortage = Math.max(item.totalUnfulfilled - item.inventory, 0);
-      item.affectedOrders.sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-      );
-    });
-
-
-    const openOrdersDetailed = rawOrders
-      .map((node) => {
-        const adminOrderId = node.id?.split("/").pop() || "";
-        const unfulfilledLineItems = (node.lineItems || [])
-          .filter((item) => Number(item?.unfulfilledQuantity || 0) > 0)
-          .map((item) => {
-            const key = item.variant?.id || item.sku || `${item.title}-${item.id}`;
-            const inventoryItemId = item.variant?.inventoryItem?.id || null;
-            const inventoryRecord = inventoryByItemId[inventoryItemId] || (
-              inventoryItemId === null
-                ? { inventory: 99999, incomingInventory: 0, locationInventory: [] }
-                : { inventory: Math.max(Number(item.variant?.inventoryQuantity || 0), 0), incomingInventory: 0, locationInventory: [] }
-            );
-
-            return {
-              id: item.id,
-              key,
-              sku: item.sku || "—",
-              product: item.title,
-              vendor: item.vendor || "—",
-              quantity: Number(item.quantity || 0),
-              unfulfilled: Number(item.unfulfilledQuantity || 0),
-              variantId: item.variant?.id || null,
-              inventoryItemId,
-              inventory: Number(inventoryRecord.inventory || 0),
-              incomingInventory: Number(inventoryRecord.incomingInventory || 0),
-              hasIncomingInventory: Number(inventoryRecord.incomingInventory || 0) > 0,
-              purchaseOrderUrl: Number(inventoryRecord.incomingInventory || 0) > 0
-                ? `https://${session.shop}/admin/purchase_orders`
-                : "",
-              locationInventory: inventoryRecord.locationInventory || [],
-            };
-          });
-
-        return {
-          id: node.id,
-          adminOrderId,
-          name: node.name,
-          date: node.createdAt,
-          status: node.displayFulfillmentStatus,
-          items: (node.lineItems || []).length,
-          unfulfilledLineItems,
-        };
-      })
-      .filter((order) => (order.unfulfilledLineItems || []).length > 0);
-
-    const orders = rawOrders
-      .map((node) => {
-        const lineItems = node.lineItems || [];
-
-        const backorderedLineItems = lineItems
-          .filter((item) => {
-            const unfulfilled = Number(item.unfulfilledQuantity || 0);
-            return unfulfilled > 0;
-          })
-          .map((item) => ({
-            id: item.id,
-            key: item.variant?.id || item.sku || `${item.title}-${item.id}`,
-            sku: item.sku || "—",
-            vendor: item.vendor || "—",
-          }));
-
-        const adminOrderId = node.id?.split("/").pop() || "";
-
-        return {
-          id: node.id,
-          adminOrderId,
-          name: node.name,
-          date: node.createdAt,
-          items: lineItems.length,
-          unfulfilledItems: backorderedLineItems.length,
-          status: node.displayFulfillmentStatus,
-          backorderedLineItems,
-        };
-      })
-      .filter((order) => order.unfulfilledItems > 0);
-
-    const restock = Object.values(skuMap)
-      .sort((a, b) => {
-        const vendorCompare = (a.vendor || "—").localeCompare(b.vendor || "—");
-        if (vendorCompare !== 0) return vendorCompare;
-        return b.shortage - a.shortage;
-      });
-
-    const allLocationShortages = restock.filter((item) => item.shortage > 0);
-    const allLocationShortageKeys = new Set(
-      allLocationShortages.map((item) => String(item.key || "")),
-    );
-
-    const summary = {
-      openBackorderOrders: orders.filter((order) =>
-        (order.backorderedLineItems || []).some((item) =>
-          allLocationShortageKeys.has(String(item.key || "")),
-        ),
-      ).length,
-      totalAffectedSkus: allLocationShortages.length,
-      totalShortageUnits: allLocationShortages.reduce(
-        (sum, item) => sum + Number(item.shortage || 0),
-        0,
-      ),
-      vendorsAffected: new Set(allLocationShortages.map((item) => item.vendor || "—")).size,
-    };
 
     return {
-      shop: session.shop,
-      orders,
-      openOrdersDetailed,
-      restock,
-      summary,
-      ordersError: "",
-      loadedAt,
+      ...value,
       syncStats: {
-        ...emptySyncStats,
-        ...stats,
-        inventoryItemsFetched: inventoryItemIds.length,
+        ...value.syncStats,
+        cached,
+        cachedAt,
       },
     };
   } catch (error) {
@@ -560,8 +619,6 @@ export default function AppIndex() {
   } = useLoaderData();
   const inventoryFetcher = useFetcher();
   const location = useLocation();
-  const revalidator = useRevalidator();
-  const isRefreshing = revalidator.state !== "idle";
   const inventoryCatalog =
     inventoryFetcher.data?.inventoryCatalog || emptyInventoryCatalog;
   const inventoryError = inventoryFetcher.data?.inventoryError || "";
@@ -583,6 +640,10 @@ export default function AppIndex() {
   const [selectedLocationIds, setSelectedLocationIds] = useState([]);
   const [selectedSkuKey, setSelectedSkuKey] = useState(null);
   const [copiedAction, setCopiedAction] = useState("");
+  const [backorderVisibleCount, setBackorderVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
+  const [fulfillmentVisibleCount, setFulfillmentVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
+  const [restockVisibleCount, setRestockVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
+  const [inventoryVisibleCount, setInventoryVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
   const [analyticsDrilldown, setAnalyticsDrilldown] = useState({
     type: null,
     label: null,
@@ -727,6 +788,12 @@ export default function AppIndex() {
     });
 
     return Array.from(grouped.values())
+      .map((item) => ({
+        ...item,
+        locations: (item.locations || [])
+          .slice()
+          .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+      }))
       .filter((item) => {
         if (selectedInventoryStockState === "in_stock") {
           return Number(item.available || 0) > 0;
@@ -827,6 +894,13 @@ export default function AppIndex() {
       })
       .filter((order) => order.unfulfilledItems > 0);
   }, [filteredRestockKeys, orders]);
+
+  const visibleFilteredOrders = useMemo(
+    () => filteredOrders.slice(0, backorderVisibleCount),
+    [backorderVisibleCount, filteredOrders],
+  );
+
+  const hasMoreBackorders = filteredOrders.length > visibleFilteredOrders.length;
 
 
   const fulfillmentOrders = useMemo(() => {
@@ -955,6 +1029,14 @@ export default function AppIndex() {
     shipStatusFilter,
   ]);
 
+  const visibleFulfillmentOrders = useMemo(
+    () => filteredFulfillmentOrders.slice(0, fulfillmentVisibleCount),
+    [filteredFulfillmentOrders, fulfillmentVisibleCount],
+  );
+
+  const hasMoreFulfillmentOrders =
+    filteredFulfillmentOrders.length > visibleFulfillmentOrders.length;
+
   const fulfillmentSummary = useMemo(() => {
     const readyToShip = fulfillmentOrders.filter(
       (order) => order.fulfillmentState === "ready_to_ship",
@@ -1007,6 +1089,38 @@ export default function AppIndex() {
       a.vendor.localeCompare(b.vendor),
     );
   }, [filteredRestock]);
+
+  const visibleGroupedRestock = useMemo(() => {
+    let remaining = restockVisibleCount;
+
+    return groupedRestock
+      .map((group) => {
+        if (remaining <= 0) {
+          return {
+            ...group,
+            items: [],
+          };
+        }
+
+        const items = group.items.slice(0, remaining);
+        remaining -= items.length;
+
+        return {
+          ...group,
+          items,
+        };
+      })
+      .filter((group) => group.items.length > 0);
+  }, [groupedRestock, restockVisibleCount]);
+
+  const hasMoreRestock = filteredRestock.length > restockVisibleCount;
+
+  const visibleInventorySkuRows = useMemo(
+    () => inventorySkuRows.slice(0, inventoryVisibleCount),
+    [inventorySkuRows, inventoryVisibleCount],
+  );
+
+  const hasMoreInventoryRows = inventorySkuRows.length > visibleInventorySkuRows.length;
 
   const analytics = useMemo(() => {
     const vendorTotals = {};
@@ -1209,6 +1323,30 @@ export default function AppIndex() {
     if (inventoryFetcher.data || inventoryFetcher.state !== "idle") return;
     inventoryFetcher.load(`/app/inventory${location.search || ""}`);
   }, [activeTab, inventoryFetcher, location.search]);
+
+  useEffect(() => {
+    setBackorderVisibleCount((current) =>
+      current === INITIAL_VISIBLE_ROWS ? current : INITIAL_VISIBLE_ROWS,
+    );
+  }, [filteredOrders.length]);
+
+  useEffect(() => {
+    setFulfillmentVisibleCount((current) =>
+      current === INITIAL_VISIBLE_ROWS ? current : INITIAL_VISIBLE_ROWS,
+    );
+  }, [filteredFulfillmentOrders.length]);
+
+  useEffect(() => {
+    setRestockVisibleCount((current) =>
+      current === INITIAL_VISIBLE_ROWS ? current : INITIAL_VISIBLE_ROWS,
+    );
+  }, [filteredRestock.length]);
+
+  useEffect(() => {
+    setInventoryVisibleCount((current) =>
+      current === INITIAL_VISIBLE_ROWS ? current : INITIAL_VISIBLE_ROWS,
+    );
+  }, [inventorySkuRows.length]);
 
   useEffect(() => {
     if (inventoryFetcher.state !== "idle") {
@@ -1665,6 +1803,14 @@ export default function AppIndex() {
     color: "#667085",
     fontWeight: 600,
     whiteSpace: "nowrap",
+  };
+
+  const paginationFooterStyle = {
+    display: "flex",
+    justifyContent: "center",
+    padding: "12px 18px 16px 18px",
+    borderTop: "1px solid #eef2f7",
+    background: "#ffffff",
   };
 
   const tableWrapStyle = {
@@ -2314,6 +2460,12 @@ export default function AppIndex() {
     closeLocationMenus();
   };
 
+  const handleRefreshData = () => {
+    const params = new URLSearchParams(location.search);
+    params.set("refresh", String(Date.now()));
+    window.location.assign(`${location.pathname}?${params.toString()}`);
+  };
+
   const handleAnalyticsVendorClick = (item) => {
     setSelectedVendor(item.label === selectedVendor ? "all" : item.label);
     setAnalyticsDrilldown({ type: null, label: null });
@@ -2599,6 +2751,7 @@ export default function AppIndex() {
             </div>
             <div style={{ fontSize: "13px", color: "#475569" }}>
               Last loaded {loadedAt ? new Date(loadedAt).toLocaleString() : "just now"}
+              {syncStats?.cached ? "Cached snapshot" : "Fresh snapshot"}
               {syncStats?.ordersFetched ? ` • ${syncStats.ordersFetched} open orders scanned` : ""}
               {syncStats?.inventoryItemsFetched ? ` • ${syncStats.inventoryItemsFetched} inventory items checked` : ""}
               {syncStats?.truncated ? " • Reached pagination safety limit" : ""}
@@ -2607,21 +2760,20 @@ export default function AppIndex() {
 
           <button
             type="button"
-            onClick={() => revalidator.revalidate()}
-            disabled={isRefreshing}
+            onClick={handleRefreshData}
             style={{
               border: "1px solid #cbd5e1",
-              background: isRefreshing ? "#f8fafc" : "#ffffff",
+              background: "#ffffff",
               color: "#0f172a",
               borderRadius: "10px",
               padding: "10px 14px",
               fontSize: "13px",
               fontWeight: 700,
-              cursor: isRefreshing ? "wait" : "pointer",
+              cursor: "pointer",
               boxShadow: "0 2px 6px rgba(15, 23, 42, 0.04)",
             }}
           >
-            {isRefreshing ? "Refreshing…" : "Refresh data"}
+            Refresh data
           </button>
         </div>
 
@@ -2729,7 +2881,7 @@ export default function AppIndex() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders.map((o) => (
+                    {visibleFilteredOrders.map((o) => (
                       <tr key={o.id}>
                         <td style={bodyCell}>
                           <a
@@ -2775,6 +2927,19 @@ export default function AppIndex() {
                     ))}
                   </tbody>
                 </table>
+                {hasMoreBackorders ? (
+                  <div style={paginationFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBackorderVisibleCount((current) => current + ROW_INCREMENT)
+                      }
+                      style={exportButtonStyle}
+                    >
+                      Show next {Math.min(ROW_INCREMENT, filteredOrders.length - visibleFilteredOrders.length)} orders
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -2904,7 +3069,7 @@ export default function AppIndex() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredFulfillmentOrders.map((order) => (
+                    {visibleFulfillmentOrders.map((order) => (
                       <tr key={`ship-${order.id}`}>
                         <td style={bodyCell}>
                           <a
@@ -2959,6 +3124,19 @@ export default function AppIndex() {
                     ))}
                   </tbody>
                 </table>
+                {hasMoreFulfillmentOrders ? (
+                  <div style={paginationFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFulfillmentVisibleCount((current) => current + ROW_INCREMENT)
+                      }
+                      style={exportButtonStyle}
+                    >
+                      Show next {Math.min(ROW_INCREMENT, filteredFulfillmentOrders.length - visibleFulfillmentOrders.length)} orders
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -3045,7 +3223,7 @@ export default function AppIndex() {
               </div>
             ) : (
               <div style={vendorGroupWrapStyle}>
-                {groupedRestock.map((group) => (
+                {visibleGroupedRestock.map((group) => (
                   <div key={group.vendor} style={vendorGroupCardStyle}>
                     <div style={vendorGroupHeaderStyle}>
                       <div style={vendorGroupTitleStyle}>{group.vendor}</div>
@@ -3136,6 +3314,19 @@ export default function AppIndex() {
                     </div>
                   </div>
                 ))}
+                {hasMoreRestock ? (
+                  <div style={paginationFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRestockVisibleCount((current) => current + ROW_INCREMENT)
+                      }
+                      style={exportButtonStyle}
+                    >
+                      Show next {Math.min(ROW_INCREMENT, filteredRestock.length - restockVisibleCount)} SKUs
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -3365,7 +3556,7 @@ export default function AppIndex() {
                     </tr>
                   </thead>
                   <tbody>
-                    {inventorySkuRows.map((item) => (
+                    {visibleInventorySkuRows.map((item) => (
                       <tr key={item.id}>
                         <td style={{ ...bodyCell, minWidth: "260px" }}>
                           <div style={skuValueStyle}>{item.product}</div>
@@ -3394,10 +3585,7 @@ export default function AppIndex() {
                         </td>
                         <td style={{ ...bodyCell, minWidth: "280px" }}>
                           <div style={lineItemsListStyle}>
-                            {(item.locations || [])
-                              .slice()
-                              .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-                              .map((location) => (
+                            {(item.locations || []).map((location) => (
                                 <div key={`${item.id}-${location.id}`} style={lineItemRowStyle}>
                                   <div style={lineItemTextStyle}>
                                     <span style={skuValueStyle}>{location.name}</span>
@@ -3426,6 +3614,19 @@ export default function AppIndex() {
                     ))}
                   </tbody>
                 </table>
+                {hasMoreInventoryRows ? (
+                  <div style={paginationFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInventoryVisibleCount((current) => current + ROW_INCREMENT)
+                      }
+                      style={exportButtonStyle}
+                    >
+                      Show next {Math.min(ROW_INCREMENT, inventorySkuRows.length - visibleInventorySkuRows.length)} SKUs
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
               </>
