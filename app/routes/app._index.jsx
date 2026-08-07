@@ -572,6 +572,8 @@ export default function AppIndex() {
     activeTab === "inventory" &&
     !inventoryFetcher.data;
   const [shipStatusFilter, setShipStatusFilter] = useState("all");
+  const [fulfillmentSkuQuery, setFulfillmentSkuQuery] = useState("");
+  const [selectedFulfillmentBrand, setSelectedFulfillmentBrand] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
   const [inventorySearchQuery, setInventorySearchQuery] = useState("");
   const [selectedInventoryBrand, setSelectedInventoryBrand] = useState("all");
@@ -908,10 +910,50 @@ export default function AppIndex() {
     openOrdersDetailed,
   ]);
 
+  const fulfillmentBrandOptions = useMemo(() => {
+    const brands = Array.from(
+      new Set(
+        fulfillmentOrders.flatMap((order) =>
+          (order.lineItems || []).map((item) => item.vendor || "—"),
+        ),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    return ["all", ...brands];
+  }, [fulfillmentOrders]);
+
   const filteredFulfillmentOrders = useMemo(() => {
-    if (shipStatusFilter === "all") return fulfillmentOrders;
-    return fulfillmentOrders.filter((order) => order.fulfillmentState === shipStatusFilter);
-  }, [fulfillmentOrders, shipStatusFilter]);
+    const normalizedSkuQuery = fulfillmentSkuQuery.trim().toLowerCase();
+
+    return fulfillmentOrders
+      .filter(
+        (order) =>
+          shipStatusFilter === "all" ||
+          order.fulfillmentState === shipStatusFilter,
+      )
+      .map((order) => {
+        const visibleLineItems = (order.lineItems || []).filter((item) => {
+          const skuMatches =
+            normalizedSkuQuery.length === 0 ||
+            String(item.sku || "").toLowerCase().includes(normalizedSkuQuery);
+          const brandMatches =
+            selectedFulfillmentBrand === "all" ||
+            (item.vendor || "—") === selectedFulfillmentBrand;
+
+          return skuMatches && brandMatches;
+        });
+
+        return {
+          ...order,
+          visibleLineItems,
+        };
+      })
+      .filter((order) => order.visibleLineItems.length > 0);
+  }, [
+    fulfillmentOrders,
+    fulfillmentSkuQuery,
+    selectedFulfillmentBrand,
+    shipStatusFilter,
+  ]);
 
   const fulfillmentSummary = useMemo(() => {
     const readyToShip = fulfillmentOrders.filter(
@@ -1427,6 +1469,10 @@ export default function AppIndex() {
     minWidth: "220px",
     outline: "none",
     boxSizing: "border-box",
+  };
+
+  const searchInputStyle = {
+    ...selectStyle,
   };
 
   const inventoryToolbarStyle = {
@@ -2744,6 +2790,38 @@ export default function AppIndex() {
             <div style={toolbarStyle}>
               <div style={toolbarControlsStyle}>
                 <div style={filterGroupStyle}>
+                  <label htmlFor="fulfillment-sku-search" style={labelStyle}>
+                    Search SKU
+                  </label>
+                  <input
+                    id="fulfillment-sku-search"
+                    type="search"
+                    value={fulfillmentSkuQuery}
+                    onChange={(event) => setFulfillmentSkuQuery(event.target.value)}
+                    placeholder="Search SKU"
+                    style={searchInputStyle}
+                  />
+                </div>
+
+                <div style={filterGroupStyle}>
+                  <label htmlFor="fulfillment-brand-filter" style={labelStyle}>
+                    Brand
+                  </label>
+                  <select
+                    id="fulfillment-brand-filter"
+                    value={selectedFulfillmentBrand}
+                    onChange={(event) => setSelectedFulfillmentBrand(event.target.value)}
+                    style={selectStyle}
+                  >
+                    {fulfillmentBrandOptions.map((brand) => (
+                      <option key={brand} value={brand}>
+                        {brand === "all" ? "All brands" : brand}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={filterGroupStyle}>
                   <label htmlFor="fulfillment-status-filter" style={labelStyle}>
                     Filter by stock status
                   </label>
@@ -2810,7 +2888,7 @@ export default function AppIndex() {
               <div style={errorStateStyle}>{ordersError}</div>
             ) : filteredFulfillmentOrders.length === 0 ? (
               <div style={emptyStateStyle}>
-                No open orders currently match this stock status filter.
+                No open orders currently match these fulfillment filters.
               </div>
             ) : (
               <div style={tableWrapStyle}>
@@ -2856,7 +2934,7 @@ export default function AppIndex() {
                         </td>
                         <td style={bodyCell}>
                           <div style={lineItemsListStyle}>
-                            {order.lineItems.map((item) => (
+                            {order.visibleLineItems.map((item) => (
                               <div key={item.id} style={lineItemRowStyle}>
                                 <div style={lineItemTextStyle}>
                                   <span style={skuLabelStyle}>SKU: </span>
