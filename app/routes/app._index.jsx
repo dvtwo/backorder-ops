@@ -629,6 +629,8 @@ export default function AppIndex() {
     activeTab === "inventory" &&
     !inventoryFetcher.data;
   const [shipStatusFilter, setShipStatusFilter] = useState("all");
+  const [backorderSkuQuery, setBackorderSkuQuery] = useState("");
+  const [selectedBackorderVendor, setSelectedBackorderVendor] = useState("all");
   const [fulfillmentSkuQuery, setFulfillmentSkuQuery] = useState("");
   const [selectedFulfillmentBrand, setSelectedFulfillmentBrand] = useState("all");
   const [selectedVendor, setSelectedVendor] = useState("all");
@@ -858,6 +860,32 @@ export default function AppIndex() {
       .filter((item) => Number(item.shortage || 0) > 0);
   }, [allLocationsSelected, normalizedSelectedLocationIds, restock, shop]);
 
+  const backorderVendorOptions = useMemo(() => {
+    const vendors = Array.from(
+      new Set(locationFilteredRestock.map((item) => item.vendor || "—")),
+    ).sort((a, b) => a.localeCompare(b));
+    return ["all", ...vendors];
+  }, [locationFilteredRestock]);
+
+  const backorderRestockKeys = useMemo(() => {
+    const normalizedSkuQuery = backorderSkuQuery.trim().toLowerCase();
+
+    return new Set(
+      locationFilteredRestock
+        .filter((item) => {
+          const vendorMatches =
+            selectedBackorderVendor === "all" ||
+            (item.vendor || "—") === selectedBackorderVendor;
+          const skuMatches =
+            normalizedSkuQuery.length === 0 ||
+            String(item.sku || "").toLowerCase().includes(normalizedSkuQuery);
+
+          return vendorMatches && skuMatches;
+        })
+        .map((item) => String(item.key || "")),
+    );
+  }, [backorderSkuQuery, locationFilteredRestock, selectedBackorderVendor]);
+
   const filteredRestock = useMemo(() => {
     if (selectedVendor === "all") return locationFilteredRestock;
     return locationFilteredRestock.filter(
@@ -895,12 +923,28 @@ export default function AppIndex() {
       .filter((order) => order.unfulfilledItems > 0);
   }, [filteredRestockKeys, orders]);
 
+  const filteredBackorderOrders = useMemo(() => {
+    return orders
+      .map((order) => {
+        const backorderedLineItems = (order.backorderedLineItems || []).filter((item) =>
+          backorderRestockKeys.has(String(item.key || "")),
+        );
+
+        return {
+          ...order,
+          backorderedLineItems,
+          unfulfilledItems: backorderedLineItems.length,
+        };
+      })
+      .filter((order) => order.unfulfilledItems > 0);
+  }, [backorderRestockKeys, orders]);
+
   const visibleFilteredOrders = useMemo(
-    () => filteredOrders.slice(0, backorderVisibleCount),
-    [backorderVisibleCount, filteredOrders],
+    () => filteredBackorderOrders.slice(0, backorderVisibleCount),
+    [backorderVisibleCount, filteredBackorderOrders],
   );
 
-  const hasMoreBackorders = filteredOrders.length > visibleFilteredOrders.length;
+  const hasMoreBackorders = filteredBackorderOrders.length > visibleFilteredOrders.length;
 
 
   const fulfillmentOrders = useMemo(() => {
@@ -1328,7 +1372,7 @@ export default function AppIndex() {
     setBackorderVisibleCount((current) =>
       current === INITIAL_VISIBLE_ROWS ? current : INITIAL_VISIBLE_ROWS,
     );
-  }, [filteredOrders.length]);
+  }, [filteredBackorderOrders.length]);
 
   useEffect(() => {
     setFulfillmentVisibleCount((current) =>
@@ -2863,9 +2907,52 @@ export default function AppIndex() {
               </p>
             </div>
 
+            {!ordersError ? (
+              <div style={toolbarStyle}>
+                <div style={toolbarControlsStyle}>
+                  <div style={filterGroupStyle}>
+                    <label htmlFor="backorder-sku-search" style={labelStyle}>
+                      Search SKU
+                    </label>
+                    <input
+                      id="backorder-sku-search"
+                      type="search"
+                      value={backorderSkuQuery}
+                      onChange={(event) => setBackorderSkuQuery(event.target.value)}
+                      placeholder="Search SKU"
+                      style={searchInputStyle}
+                    />
+                  </div>
+
+                  <div style={filterGroupStyle}>
+                    <label htmlFor="backorder-vendor-filter" style={labelStyle}>
+                      Vendor
+                    </label>
+                    <select
+                      id="backorder-vendor-filter"
+                      value={selectedBackorderVendor}
+                      onChange={(event) => setSelectedBackorderVendor(event.target.value)}
+                      style={selectStyle}
+                    >
+                      {backorderVendorOptions.map((vendor) => (
+                        <option key={vendor} value={vendor}>
+                          {vendor === "all" ? "All vendors" : vendor}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div style={resultCountStyle}>
+                  {filteredBackorderOrders.length} order
+                  {filteredBackorderOrders.length === 1 ? "" : "s"}
+                </div>
+              </div>
+            ) : null}
+
             {ordersError ? (
               <div style={errorStateStyle}>{ordersError}</div>
-            ) : filteredOrders.length === 0 ? (
+            ) : filteredBackorderOrders.length === 0 ? (
               <div style={emptyStateStyle}>No backorders found.</div>
             ) : (
               <div style={tableWrapStyle}>
@@ -2936,7 +3023,7 @@ export default function AppIndex() {
                       }
                       style={exportButtonStyle}
                     >
-                      Show next {Math.min(ROW_INCREMENT, filteredOrders.length - visibleFilteredOrders.length)} orders
+                      Show next {Math.min(ROW_INCREMENT, filteredBackorderOrders.length - visibleFilteredOrders.length)} orders
                     </button>
                   </div>
                 ) : null}
